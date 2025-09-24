@@ -1,6 +1,7 @@
 from app.core.orchestrator import handle_user
 from app.memory.db import add_feedback, last_assistant_msg_id, mark_approved
 from app.core import bandit
+from scripts.consolidate_sleep import run_sleep_batch
 
 
 def main():
@@ -47,6 +48,10 @@ def main():
             if mid:
                 mark_approved(mid, 1)
                 print("✅ approved")
+            continue
+        if t == "/sleep":
+            run_sleep_batch()
+            print("💤 sleep batch done.")
             continue
 
         result = handle_user(user_id, t, channel="cli", chat_id="local") or {}
