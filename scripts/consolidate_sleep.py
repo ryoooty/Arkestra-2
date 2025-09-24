@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 from app.core import neuro
 from app.core.summarize import summarize_day
 from app.memory.db import get_conn
+from scripts.export_junior_lora import export_junior_lora
 
 
 def _last_batch(conn) -> Dict:
@@ -66,4 +67,5 @@ def run_sleep_batch():
 
     # neuro reset after batch
     neuro.sleep_reset()
+    export_junior_lora()
     print(f"Sleep batch {batch_id} done. processed={processed}")
