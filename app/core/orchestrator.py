@@ -79,11 +79,20 @@ def handle_user(
 
     # 7) guard
     final_text, hits = soft_censor(reply.get("text", "")) if reply else ("", {})
-    # TODO: save assistant message
-    insert_message(user_id, "assistant", final_text)
+    assistant_msg_id = insert_message(user_id, "assistant", final_text)
+    bandit_kind = None
+    # fast bandit update if junior had suggestions
+    try:
+        if jr and jr.get("suggestions"):
+            chosen = jr.get("chosen_suggestion") or {}
+            bandit_kind = chosen.get("kind") or (tool_calls and "good" or "mischief") or "good"
+    except Exception:
+        bandit_kind = None
 
     return {
         "text": final_text,
+        "assistant_msg_id": assistant_msg_id,
+        "bandit_kind": bandit_kind,
         "tool_calls": tool_calls,
         "tool_results": tool_results,
         "rag_hits": rag_hits,

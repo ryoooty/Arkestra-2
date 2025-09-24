@@ -3,6 +3,8 @@ SQLite DB helper + migrations.
 Provides: get_conn(), migrate(), simple CRUD helpers used by core/* and tools/*.
 """
 
+from __future__ import annotations
+
 import sqlite3
 from pathlib import Path
 from typing import Any, Dict, List
@@ -135,6 +137,31 @@ def insert_message(user_id: str, role: str, text: str, approved: int = 0) -> int
         cur = c.execute("INSERT INTO messages(user_id, role, text, approved) VALUES (?,?,?,?)",
                         (user_id, role, text, approved))
         return cur.lastrowid
+
+
+def add_feedback(msg_id: int, kind: str, text: str | None = None) -> int:
+    assert kind in ("up", "down", "text")
+    with get_conn() as c:
+        cur = c.execute(
+            "INSERT INTO feedback(msg_id, kind, text) VALUES (?,?,?)",
+            (msg_id, kind, text),
+        )
+        return cur.lastrowid
+
+
+def mark_approved(msg_id: int, approved: int = 1) -> None:
+    with get_conn() as c:
+        c.execute("UPDATE messages SET approved=? WHERE id=?", (approved, msg_id))
+
+
+def last_assistant_msg_id(user_id: str) -> int | None:
+    with get_conn() as c:
+        cur = c.execute(
+            "SELECT id FROM messages WHERE user_id=? AND role='assistant' ORDER BY id DESC LIMIT 1",
+            (user_id,),
+        )
+        row = cur.fetchone()
+        return int(row["id"]) if row else None
 
 
 def get_last_messages(user_id: str, n: int = 6) -> list[dict]:
