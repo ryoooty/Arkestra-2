@@ -5,8 +5,9 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
-from app.memory.db import get_conn, migrate, get_tool_instructions, upsert_bandit, add_feedback, mark_approved
+from app.memory.db import get_conn, migrate, upsert_bandit, add_feedback, mark_approved
 from app.core.logs import log
+from app.core.orchestrator import handle_user
 
 
 templates = Jinja2Templates(directory="app/server/templates")
@@ -30,6 +31,29 @@ class ToolUpdate(BaseModel):
     instruction: Optional[str] = None
     entrypoint: Optional[str] = None
     enabled: Optional[bool] = None
+
+
+class ChatIn(BaseModel):
+    user_id: str
+    text: str
+    channel: str = "api"
+    chat_id: str = "default"
+    participants: Optional[List[str]] = None
+
+
+@app.post("/chat")
+def chat(c: ChatIn):
+    try:
+        result = handle_user(
+            user_id=c.user_id,
+            text=c.text,
+            channel=c.channel,
+            chat_id=c.chat_id,
+            participants=c.participants,
+        )
+        return result
+    except Exception as e:
+        raise HTTPException(500, f"Chat error: {e}")
 
 
 @app.on_event("startup")
