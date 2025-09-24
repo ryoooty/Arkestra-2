@@ -137,6 +137,16 @@ def insert_message(user_id: str, role: str, text: str, approved: int = 0) -> int
         return cur.lastrowid
 
 
+def get_last_messages(user_id: str, n: int = 6) -> list[dict]:
+    with get_conn() as c:
+        cur = c.execute(
+            "SELECT role,text,ts FROM messages WHERE user_id=? ORDER BY id DESC LIMIT ?",
+            (user_id, n),
+        )
+        rows = [dict(r) for r in cur.fetchall()]
+        return list(reversed(rows))
+
+
 def upsert_env_session(channel: str, chat_id: str, participants_json: str) -> int:
     with get_conn() as c:
         c.execute(
