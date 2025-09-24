@@ -12,6 +12,8 @@ from app.agents.senior import (
     generate_structured as sr_generate,
     refine_with_results as sr_refine,
 )
+from app.core.budget import trim as pack_budget
+from app.core.tokens import count_struct
 from app.core.logs import log, span
 
 
@@ -90,15 +92,28 @@ def handle_user(
 
     # 5) senior
     with span("senior"):
+        packed = pack_budget(
+            history=hist_tail,
+            rag_hits=rag_hits,
+            junior_meta=jr,
+            max_tokens=preset.get("max_tokens", 512) if isinstance(preset, dict) else 512,
+        )
         sr_payload = {
-            "history": hist_tail,
+            "history": packed["history"],
             "user_text": text,
-            "rag_hits": rag_hits,
-            "junior_json": jr,
+            "rag_hits": packed["rag_hits"],
+            "junior_json": packed["junior_meta"],
             "preset": preset,
             "style_directive": jr.get("style_directive", "") if jr else "",
             "env_brief": env_brief,
         }
+        log.info(
+            "budget: hist=%s (tokens=%s) rag=%s max_tokens=%s",
+            len(packed["history"]),
+            count_struct(packed["history"]),
+            len(packed["rag_hits"]),
+            preset.get("max_tokens") if isinstance(preset, dict) else None,
+        )
         tool_instr = get_tool_instructions(jr.get("tools_hint", [])) if jr else {}
         sr_payload["tool_instructions"] = tool_instr
         reply = sr_generate(sr_payload)
