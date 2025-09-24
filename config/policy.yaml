@@ -1,0 +1,6 @@
+# policy.yaml — правила поведения
+rules:
+  - when: { intent: "task" }
+    do: ["ask_clarify_if_ambiguous", "prefer_tools"]
+  - when: { risk_gt: 0.6 }
+    do: ["require_confirmation", "lower_creativity"]

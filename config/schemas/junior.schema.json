@@ -1,0 +1,10 @@
+{
+  "$id":"junior.schema.json",
+  "type":"object",
+  "required":["schema_version","intent","suggestions"],
+  "properties": {
+    "schema_version":{"type":"string"},
+    "intent":{"enum":["smalltalk","ask","task","joke","other"]},
+    "suggestions":{"type":"array"}
+  }
+}
