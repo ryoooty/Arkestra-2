@@ -10,7 +10,13 @@ senior.py — Mistral-7B. Роль: исполнитель и стилист.
 
 from typing import Dict, Any
 import json
+from jsonschema import validate, ValidationError
+from pathlib import Path
+import yaml
 from app.core.llm import generate as llm_generate
+
+_SCHEMA = json.loads(Path("config/schemas/reply.schema.json").read_text(encoding="utf-8"))
+_CFG = yaml.safe_load(Path("config/llm.yaml").read_text(encoding="utf-8"))
 
 _SYS = """You are SENIOR for Arkestra (Mistral-7B).
 You must produce a compact JSON with keys: text, tool_calls (optional array of {name,args}), memory (optional), plan (optional).
@@ -46,7 +52,8 @@ def _build_prompt(payload: Dict[str, Any]) -> str:
 
 def generate_structured(payload: Dict[str, Any]) -> Dict[str, Any]:
     prompt = _build_prompt(payload)
-    raw = llm_generate("senior", prompt, max_new_tokens=512)
+    temp = _CFG.get("senior", {}).get("temperature", 0.7)
+    raw = llm_generate("senior", prompt, max_new_tokens=512, temperature=temp, stop=["\n\n"])
     # Extract JSON
     try:
         data = json.loads(raw)
@@ -56,6 +63,11 @@ def generate_structured(payload: Dict[str, Any]) -> Dict[str, Any]:
             data = json.loads(raw[start:end+1])
         else:
             raise RuntimeError(f"Senior returned non-JSON: {raw}")
+    try:
+        validate(instance=data, schema=_SCHEMA)
+    except ValidationError:
+        # minimal recovery to keep service alive
+        data = {"text": data["text"]} if isinstance(data, dict) and "text" in data else {"text": "Извини, у меня сбой формата ответа."}
     # light sanity
     if "text" not in data:
         raise RuntimeError("Senior reply lacks 'text'")
@@ -73,7 +85,8 @@ def refine_with_results(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     base = _build_prompt(payload) + f"\nTOOL_RESULTS: {payload.get('tool_results', [])}\n"
     base += "Now briefly update 'text' to include outcomes. Reply JSON with just {'text': '...'}."
-    raw = llm_generate("senior", base, max_new_tokens=256)
+    temp = _CFG.get("senior", {}).get("temperature", 0.7)
+    raw = llm_generate("senior", base, max_new_tokens=256, temperature=temp, stop=["\n\n"])
     try:
         data = json.loads(raw)
     except Exception:
@@ -81,4 +94,8 @@ def refine_with_results(payload: Dict[str, Any]) -> Dict[str, Any]:
         data = json.loads(raw[s:e+1]) if s >= 0 and e > s else {"text": raw.strip()}
     if "text" not in data:
         data = {"text": str(raw).strip()}
+    try:
+        validate(instance=data, schema=_SCHEMA)
+    except ValidationError:
+        data = {"text": data["text"]} if isinstance(data, dict) and "text" in data else {"text": "Извини, у меня сбой формата ответа."}
     return data
