@@ -1,15 +1,157 @@
 """
-db.py — доступ к БД/миграции.
-Таблицы (минимально):
-- messages(id, user_id, role, text, ts, approved)
-- facts(id, user_id, key, value, ts)
-- notes(id, user_id, text, tags, ts)
-- aliases(id, user_id, alias, is_primary, short_desc, ts)
-- feedback(id, msg_id, kind up|down|text, text?, ts)
-- neuro_logs(id, session_id, levels_json, preset_json, ts)
-- bandit_stats(intent, kind, wins, plays, updated_at)
-- tools(name PK, title, description, instruction, entrypoint, enabled)
-- env_sessions(id, channel, chat_id, participants_json, started_at, last_seen)
-- env_facts(id, env_id, key, value, importance, updated_at)
-- sleep_batches(id, started_at, finished_at, from_seen_at, to_seen_at, processed_count, status)
+SQLite DB helper + migrations.
+Provides: get_conn(), migrate(), simple CRUD helpers used by core/* and tools/*.
 """
+
+import sqlite3
+from pathlib import Path
+from typing import Any, Dict, List
+
+DB_PATH = Path("arkestra.db")
+
+SCHEMA_SQL = """
+PRAGMA journal_mode=WAL;
+CREATE TABLE IF NOT EXISTS messages(
+  id INTEGER PRIMARY KEY,
+  user_id TEXT,
+  role TEXT CHECK(role IN ('user','assistant')),
+  text TEXT,
+  ts DATETIME DEFAULT CURRENT_TIMESTAMP,
+  approved INTEGER DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS facts(
+  id INTEGER PRIMARY KEY,
+  user_id TEXT, key TEXT, value TEXT,
+  ts DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS notes(
+  id INTEGER PRIMARY KEY,
+  user_id TEXT, text TEXT, tags TEXT,
+  ts DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS aliases(
+  id INTEGER PRIMARY KEY,
+  user_id TEXT, alias TEXT,
+  is_primary INTEGER DEFAULT 0,
+  short_desc TEXT,
+  ts DATETIME DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(user_id, alias)
+);
+CREATE TABLE IF NOT EXISTS feedback(
+  id INTEGER PRIMARY KEY,
+  msg_id INTEGER,
+  kind TEXT CHECK(kind IN ('up','down','text')),
+  text TEXT,
+  ts DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS neuro_logs(
+  id INTEGER PRIMARY KEY,
+  session_id TEXT,
+  levels_json TEXT,
+  preset_json TEXT,
+  ts DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS bandit_stats(
+  intent TEXT, kind TEXT,
+  wins REAL DEFAULT 1, plays REAL DEFAULT 2,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY(intent, kind)
+);
+CREATE TABLE IF NOT EXISTS tools(
+  name TEXT PRIMARY KEY,
+  title TEXT, description TEXT,
+  instruction TEXT, entrypoint TEXT,
+  enabled INTEGER DEFAULT 1
+);
+CREATE TABLE IF NOT EXISTS env_sessions(
+  id INTEGER PRIMARY KEY,
+  channel TEXT, chat_id TEXT,
+  participants_json TEXT,
+  started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  last_seen DATETIME DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(channel, chat_id)
+);
+CREATE TABLE IF NOT EXISTS env_facts(
+  id INTEGER PRIMARY KEY,
+  env_id INTEGER,
+  key TEXT, value TEXT,
+  importance REAL DEFAULT 0.5,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY(env_id) REFERENCES env_sessions(id)
+);
+CREATE TABLE IF NOT EXISTS sleep_batches(
+  id TEXT PRIMARY KEY,
+  started_at DATETIME,
+  finished_at DATETIME,
+  from_seen_at DATETIME,
+  to_seen_at DATETIME,
+  processed_count INTEGER,
+  status TEXT
+);
+"""
+
+
+def get_conn() -> sqlite3.Connection:
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def migrate() -> None:
+    with get_conn() as c:
+        c.executescript(SCHEMA_SQL)
+
+
+def upsert_bandit(intent: str, kind: str, wins_delta: float, plays_delta: float) -> None:
+    with get_conn() as c:
+        cur = c.execute("SELECT wins,plays FROM bandit_stats WHERE intent=? AND kind=?", (intent, kind))
+        row = cur.fetchone()
+        if row:
+            wins = row["wins"] + wins_delta
+            plays = row["plays"] + plays_delta
+            c.execute("UPDATE bandit_stats SET wins=?, plays=?, updated_at=CURRENT_TIMESTAMP WHERE intent=? AND kind=?",
+                      (wins, plays, intent, kind))
+        else:
+            c.execute("INSERT INTO bandit_stats(intent,kind,wins,plays) VALUES (?,?,?,?)",
+                      (intent, kind, max(1.0+wins_delta, 0.0), max(2.0+plays_delta, 0.0)))
+
+
+def decay_bandit(factor: float = 0.995) -> None:
+    with get_conn() as c:
+        c.execute("UPDATE bandit_stats SET wins=wins*?, plays=plays*?, updated_at=CURRENT_TIMESTAMP", (factor, factor))
+
+
+def insert_message(user_id: str, role: str, text: str, approved: int = 0) -> int:
+    with get_conn() as c:
+        cur = c.execute("INSERT INTO messages(user_id, role, text, approved) VALUES (?,?,?,?)",
+                        (user_id, role, text, approved))
+        return cur.lastrowid
+
+
+def upsert_env_session(channel: str, chat_id: str, participants_json: str) -> int:
+    with get_conn() as c:
+        c.execute(
+            "INSERT INTO env_sessions(channel,chat_id,participants_json) VALUES (?,?,?) "
+            "ON CONFLICT(channel,chat_id) DO UPDATE SET last_seen=CURRENT_TIMESTAMP",
+            (channel, chat_id, participants_json)
+        )
+        cur = c.execute("SELECT id FROM env_sessions WHERE channel=? AND chat_id=?", (channel, chat_id))
+        return int(cur.fetchone()["id"])
+
+
+def get_env_facts(env_id: int) -> List[Dict[str, Any]]:
+    with get_conn() as c:
+        cur = c.execute("SELECT key,value,importance FROM env_facts WHERE env_id=? ORDER BY importance DESC, updated_at DESC", (env_id,))
+        return [dict(r) for r in cur.fetchall()]
+
+
+def set_env_fact(env_id: int, key: str, value: str, importance: float = 0.5) -> None:
+    with get_conn() as c:
+        cur = c.execute("SELECT id FROM env_facts WHERE env_id=? AND key=?", (env_id, key))
+        row = cur.fetchone()
+        if row:
+            c.execute("UPDATE env_facts SET value=?, importance=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                      (value, importance, row["id"]))
+        else:
+            c.execute("INSERT INTO env_facts(env_id,key,value,importance) VALUES (?,?,?,?)",
+                      (env_id, key, value, importance))
