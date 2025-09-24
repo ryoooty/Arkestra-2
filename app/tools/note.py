@@ -1,10 +1,8 @@
 """
-note.py — инструмент note.create
-- сохраняет заметку в БД
-- аргументы: text, tags
-- возвращает {"ok":true, "note_id":...}
+note.create — сохранить заметку.
+args: {text: str, tags?: list[str]}
+return: {"ok": true, "note_id": "..."}
 """
 
-
-def main(args: dict):
+def main(args: dict) -> dict:
     raise NotImplementedError("Note tool stub")

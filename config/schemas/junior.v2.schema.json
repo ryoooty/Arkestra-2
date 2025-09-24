@@ -1,0 +1,20 @@
+{
+  "$id": "junior.v2.schema.json",
+  "type": "object",
+  "required": ["intent", "tools_hint", "style_directive", "neuro_update"],
+  "properties": {
+    "intent": {"enum": ["smalltalk","ask","task","joke","other"]},
+    "tools_hint": {"type":"array","items":{"type":"string"}},
+    "tools_request": {"type":"array","items":{"type":"object","properties":{"name":{"type":"string"},"reason":{"type":"string"}}}},
+    "rag_query": {"type":["string","null"]},
+    "style_directive": {"type":"string"},
+    "neuro_update": {
+      "type":"object",
+      "properties":{
+        "levels":{"type":"object","additionalProperties":{"type":"integer"},"minProperties":3},
+        "reason":{"type":"string"}
+      },
+      "required":["levels"]
+    }
+  }
+}

@@ -1,0 +1,27 @@
+# Расширенные нейромедиаторы (min/base/max) и их bias-map
+neuro_baselines:
+  min:
+    dopamine: 1; serotonin: 1; norepinephrine: 1; acetylcholine: 1; gaba: 1
+    glutamate: 1; endorphins: 1; oxytocin: 1; vasopressin: 1; histamine: 1
+  base:
+    dopamine: 7; serotonin: 5; norepinephrine: 4; acetylcholine: 5; gaba: 4
+    glutamate: 6; endorphins: 5; oxytocin: 6; vasopressin: 3; histamine: 5
+  max:
+    dopamine: 11; serotonin: 11; norepinephrine: 11; acetylcholine: 11; gaba: 11
+    glutamate: 11; endorphins: 11; oxytocin: 11; vasopressin: 11; histamine: 11
+
+bias_map:
+  dopamine:     {temperature: 0.15, humor: 0.25, max_tokens: 120}
+  serotonin:    {politeness: 0.4}
+  norepinephrine:{temperature: -0.2, structure: 0.4, max_tokens: -80}
+  acetylcholine:{ask_clarify: 0.5}
+  gaba:         {pace: -0.2, hedging: 0.2}
+  glutamate:    {memory_write_bias: 0.4}
+  endorphins:   {positive_affect: 0.4}
+  oxytocin:     {we_pronouns: 0.3, empathy: 0.4}
+  vasopressin:  {assertiveness: 0.4, boundaries: 0.3}
+  histamine:    {energy: 0.4, exclamation_bias: 0.2}
+
+sleep_reset_profile:
+  dopamine: 6; serotonin: 6; norepinephrine: 4; acetylcholine: 5; gaba: 4
+  glutamate: 6; endorphins: 5; oxytocin: 6; vasopressin: 3; histamine: 4
