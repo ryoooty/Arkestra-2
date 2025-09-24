@@ -1,10 +1,13 @@
 from app.core.orchestrator import handle_user
+from app.core.reminders import init_scheduler
 from app.memory.db import add_feedback, last_assistant_msg_id, mark_approved
 from app.core import bandit
 from scripts.consolidate_sleep import run_sleep_batch
 
 
 def main():
+    init_scheduler()
+
     user_id = "local-user"
     print("Arkestra CLI. Type 'quit' to exit. Commands: /up /down /fb <text> /ok")
 
