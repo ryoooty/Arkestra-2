@@ -1,18 +1,20 @@
 
 from fastapi import FastAPI, HTTPException
+from fastapi import Request, Form
+from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
 from app.memory.db import get_conn, migrate, get_tool_instructions, upsert_bandit, add_feedback, mark_approved
 from app.core.logs import log
 
 
+templates = Jinja2Templates(directory="app/server/templates")
+
 
 
 app = FastAPI(title="Arkestra Admin API", version="1.0")
 
-@app.get("/health")
-def health() -> dict:
-    return {"ok": True}
 class ToolIn(BaseModel):
     name: str = Field(..., regex=r"^[a-z0-9._\-]+$")
     title: str
@@ -89,6 +91,71 @@ def delete_tool(name: str):
         if c.rowcount == 0:
             raise HTTPException(404, "Tool not found")
     return {"ok": True}
+
+
+# --- UI for tools management ---
+@app.get("/ui/tools", response_class=HTMLResponse)
+def ui_tools(request: Request):
+    tools = list_tools()
+    return templates.TemplateResponse("tools.html", {"request": request, "tools": tools})
+
+
+@app.post("/ui/tools")
+def ui_create_tool(
+    request: Request,
+    name: str = Form(...),
+    title: str = Form(...),
+    description: str = Form(""),
+    instruction: str = Form(""),
+    entrypoint: str = Form(...),
+    enabled: Optional[str] = Form(None),
+):
+    create_tool(
+        ToolIn(
+            name=name,
+            title=title,
+            description=description,
+            instruction=instruction,
+            entrypoint=entrypoint,
+            enabled=bool(enabled),
+        )
+    )
+    return RedirectResponse(url="/ui/tools", status_code=303)
+
+
+@app.get("/ui/tools/{name}", response_class=HTMLResponse)
+def ui_edit_tool(request: Request, name: str):
+    tool = get_tool(name)
+    return templates.TemplateResponse("tool_edit.html", {"request": request, "tool": tool})
+
+
+@app.post("/ui/tools/{name}")
+def ui_update_tool(
+    request: Request,
+    name: str,
+    title: str = Form(""),
+    description: str = Form(""),
+    instruction: str = Form(""),
+    entrypoint: str = Form(""),
+    enabled: Optional[str] = Form(None),
+):
+    update_tool(
+        name,
+        ToolUpdate(
+            title=title,
+            description=description,
+            instruction=instruction,
+            entrypoint=entrypoint,
+            enabled=bool(enabled),
+        ),
+    )
+    return RedirectResponse(url=f"/ui/tools/{name}", status_code=303)
+
+
+@app.post("/ui/tools/{name}/delete")
+def ui_delete_tool(name: str):
+    delete_tool(name)
+    return RedirectResponse(url="/ui/tools", status_code=303)
 
 
 # --- Environment facts (read) ---
