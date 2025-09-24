@@ -62,3 +62,39 @@ def generate_structured(payload: Dict[str, Any]) -> Dict[str, Any]:
     if "tool_calls" in data and not isinstance(data["tool_calls"], list):
         data["tool_calls"] = []
     return data
+
+
+def refine_reply(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Fallback deterministic refinement step.
+
+    Until a dedicated refine LLM prompt is introduced we simply attach tool
+    outputs to the existing draft if necessary so that orchestrator logic
+    remains uniform.
+    """
+
+    draft = payload.get("draft_reply") or {}
+    if not isinstance(draft, dict):
+        draft = {"text": str(draft)}
+    tool_results = payload.get("tool_results") or []
+    if not tool_results:
+        return draft
+
+    extra_chunks = []
+    for item in tool_results:
+        if not isinstance(item, dict):
+            continue
+        output = item.get("result") or item.get("output") or item.get("text")
+        if isinstance(output, (dict, list)):
+            output = json.dumps(output, ensure_ascii=False)
+        if not output:
+            continue
+        extra_chunks.append(str(output))
+
+    if not extra_chunks:
+        return draft
+
+    refined = dict(draft)
+    base_text = refined.get("text", "")
+    suffix = "\n\n" if base_text else ""
+    refined["text"] = f"{base_text}{suffix}{'\n'.join(extra_chunks)}"
+    return refined
