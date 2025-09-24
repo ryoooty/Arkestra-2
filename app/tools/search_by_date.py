@@ -1,5 +1,7 @@
 """
-search_by_date.py — инструмент messages.search_by_date
-- ищет сообщения по конкретной дате/диапазону
-- возвращает список или краткую сводку
+messages.search_by_date — поиск по дате.
+args: {date: "YYYY-MM-DD", span_days?: int=1}
 """
+
+def main(args: dict) -> dict:
+    raise NotImplementedError

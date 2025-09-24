@@ -1,4 +1,3 @@
-# tools.yaml — глобальные настройки инструментов
 expose_in_prompt: true
 max_tools_in_prompt: 8
 policy:

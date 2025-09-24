@@ -1,9 +1,9 @@
-# router.yaml — маршрутизация RAG
 defaults:
-  top_k: 3
-  window_days: 45
+  top_k: 6
+  rerank_top_k: 3
+  window_days: 60
 routes:
-  task:
-    targets: [short, temp]
-  joke:
-    targets: [jokes]
+  task:     { targets: [temp, short, long] }
+  ask:      { targets: [temp, short] }
+  smalltalk:{ targets: [short, jokes] }
+  joke:     { targets: [jokes] }

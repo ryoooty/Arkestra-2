@@ -1,5 +1,11 @@
 """
-alias.py — инструменты для работы с алиасами:
-- alias.add (добавить новый алиас с описанием)
-- alias.set_primary (сделать основным)
+alias.add — добавить алиас (с коротким описанием).
+alias.set_primary — сделать алиас основным.
 """
+
+def add(args: dict) -> dict:
+    raise NotImplementedError
+
+
+def set_primary(args: dict) -> dict:
+    raise NotImplementedError
