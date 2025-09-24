@@ -8,7 +8,10 @@ from app.core.router import search as rag_search
 from app.core.tools_runner import run_all
 from app.core.guard import soft_censor
 from app.agents.junior import generate as jr_generate
-from app.agents.senior import generate_structured as sr_generate
+from app.agents.senior import (
+    generate_structured as sr_generate,
+    refine_with_results as sr_refine,
+)
 
 
 def handle_user(
@@ -49,6 +52,19 @@ def handle_user(
     }
     jr = jr_generate(jr_payload)  # ожидается JSON v2
 
+    tools_req = jr.get("tools_request", []) if jr else []
+    missing = [
+        r
+        for r in tools_req
+        if r.get("name")
+        and r["name"]
+        not in [t["name"] for t in jr_payload["tools_catalog"]]
+    ]
+    if missing:
+        # превратить в мягкую просьбу пользователю через senior первичным текстом
+        # senior сам вставит предложение "Хочешь, добавим инструмент X? Я подскажу спецификацию."
+        pass
+
     # 3) neuro preset
     if jr and "neuro_update" in jr and "levels" in jr["neuro_update"]:
         neuro.set_levels(jr["neuro_update"]["levels"])
@@ -77,8 +93,17 @@ def handle_user(
     tool_calls = reply.get("tool_calls", []) if reply else []
     tool_results = run_all(tool_calls) if tool_calls else []
 
-    # 7) guard
-    final_text, hits = soft_censor(reply.get("text", "")) if reply else ("", {})
+    if tool_results:
+        refine_payload = dict(sr_payload)
+        refine_payload["tool_results"] = tool_results
+        refined = sr_refine(refine_payload)
+        if refined and refined.get("text"):
+            final_text, hits = soft_censor(refined["text"])
+        else:
+            final_text, hits = soft_censor(reply.get("text", "")) if reply else ("", {})
+    else:
+        # 7) guard
+        final_text, hits = soft_censor(reply.get("text", "")) if reply else ("", {})
     # TODO: save assistant message
     insert_message(user_id, "assistant", final_text)
 

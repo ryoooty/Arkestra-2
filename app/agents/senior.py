@@ -14,8 +14,9 @@ from app.core.llm import generate as llm_generate
 
 _SYS = """You are SENIOR for Arkestra (Mistral-7B).
 You must produce a compact JSON with keys: text, tool_calls (optional array of {name,args}), memory (optional), plan (optional).
-Use tool instructions exactly as given. 
-User-facing text goes into "text". Do NOT include code fences. 
+Use tool instructions exactly as given.
+If JUNIOR.tools_request contains имена отсутствующих инструментов, в 'text' вежливо попроси пользователя добавить их и кратко объясни зачем.
+User-facing text goes into "text". Do NOT include code fences.
 Keep helpful, follow style_directive, and constraints from preset and env_brief."""
 
 
@@ -61,4 +62,23 @@ def generate_structured(payload: Dict[str, Any]) -> Dict[str, Any]:
     # Normalize tool_calls
     if "tool_calls" in data and not isinstance(data["tool_calls"], list):
         data["tool_calls"] = []
+    return data
+
+
+def refine_with_results(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    payload: same as generate_structured + {"tool_results":[...]}
+    Returns JSON with at least 'text'.
+    """
+
+    base = _build_prompt(payload) + f"\nTOOL_RESULTS: {payload.get('tool_results', [])}\n"
+    base += "Now briefly update 'text' to include outcomes. Reply JSON with just {'text': '...'}."
+    raw = llm_generate("senior", base, max_new_tokens=256)
+    try:
+        data = json.loads(raw)
+    except Exception:
+        s = raw.find("{"); e = raw.rfind("}")
+        data = json.loads(raw[s:e+1]) if s >= 0 and e > s else {"text": raw.strip()}
+    if "text" not in data:
+        data = {"text": str(raw).strip()}
     return data
