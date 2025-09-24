@@ -1,1 +1,4 @@
 jsonschema
+fastapi
+uvicorn
+jinja2
