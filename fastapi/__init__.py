@@ -8,14 +8,53 @@ RouteKey = Tuple[str, str]
 class FastAPI:
     """Very small subset of FastAPI used in unit tests."""
 
-    def __init__(self) -> None:
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
         self._routes: Dict[RouteKey, Callable[..., Any]] = {}
+        self._events: Dict[str, list[Callable[..., Any]]] = {}
+        self._middleware: Dict[str, list[Callable[..., Any]]] = {}
 
-    def get(self, path: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+    def _register(self, method: str, path: str, func: Callable[..., Any]) -> Callable[..., Any]:
+        self._routes[(method.upper(), path)] = func
+        return func
+
+    def get(self, path: str, **_kwargs: Any) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
         """Register a GET route."""
 
         def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
-            self._routes[("GET", path)] = func
+            return self._register("GET", path, func)
+
+        return decorator
+
+    def post(self, path: str, **_kwargs: Any) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+        """Register a POST route."""
+
+        def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
+            return self._register("POST", path, func)
+
+        return decorator
+
+    def put(self, path: str, **_kwargs: Any) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+        def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
+            return self._register("PUT", path, func)
+
+        return decorator
+
+    def delete(self, path: str, **_kwargs: Any) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+        def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
+            return self._register("DELETE", path, func)
+
+        return decorator
+
+    def on_event(self, event: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+        def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
+            self._events.setdefault(event, []).append(func)
+            return func
+
+        return decorator
+
+    def middleware(self, mtype: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+        def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
+            self._middleware.setdefault(mtype, []).append(func)
             return func
 
         return decorator
@@ -25,7 +64,10 @@ class FastAPI:
         handler = self._routes.get(key)
         if handler is None:
             raise KeyError(f"Route not found for {method} {path}")
-        result = handler(**kwargs)
+        try:
+            result = handler(**kwargs)
+        except HTTPException as exc:  # pragma: no cover - simple exception handling
+            return exc.status_code, {"detail": exc.detail}, {}
         status = 200
         headers: Dict[str, Any] = {}
         body = result
@@ -37,4 +79,23 @@ class FastAPI:
         return status, body, headers
 
 
-__all__ = ["FastAPI"]
+class HTTPException(Exception):
+    """Simplified HTTPException compatible with FastAPI usage."""
+
+    def __init__(self, status_code: int, detail: Any) -> None:
+        super().__init__(detail)
+        self.status_code = status_code
+        self.detail = detail
+
+
+class Request:  # pragma: no cover - simple placeholder for typing
+    """Placeholder request type for handlers expecting FastAPI Request."""
+
+
+def Form(default: Any = ..., **_kwargs: Any) -> Any:  # pragma: no cover - placeholder dependency
+    """Return default value to emulate FastAPI Form dependency."""
+
+    return default
+
+
+__all__ = ["FastAPI", "HTTPException", "Request", "Form"]
