@@ -1,10 +1,11 @@
 from typing import List, Dict
 import random
 
-from app.memory.db import upsert_bandit, get_conn
+from app.memory.db import upsert_bandit, get_conn, migrate
 
 EPS = 0.1
 
+migrate()
 
 def _ctr(intent: str, kind: str) -> float:
     with get_conn() as c:
