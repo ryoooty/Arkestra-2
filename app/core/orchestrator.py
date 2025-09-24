@@ -1,6 +1,6 @@
 from typing import Dict, Any, List
 
-from app.memory.db import insert_message
+from app.memory.db import insert_message, get_last_messages
 from app.memory.db import get_tool_instructions
 from app.core.env_state import ensure_env_session
 from app.core import neuro
@@ -22,17 +22,19 @@ def handle_user(
     insert_message(user_id, "user", text)
 
     # 1) env
-    env_id = ensure_env_session(channel, chat_id, participants)
+    ensure_env_session(channel, chat_id, participants)
     env_brief = {
-        "env_id": env_id,
         "channel": channel,
         "chat_id": chat_id,
         "participants": participants,
     }
 
+    # fetch history tail
+    hist_tail = get_last_messages(user_id, n=6)
+
     # 2) junior
     jr_payload = {
-        "history_tail": [],  # TODO: fetch last N messages
+        "history_tail": hist_tail,
         "user_text": text,
         "neuro_snapshot": neuro.snapshot(),
         "env_brief": env_brief,
@@ -59,7 +61,7 @@ def handle_user(
 
     # 5) senior
     sr_payload = {
-        "history": [],  # TODO: fetch last N
+        "history": hist_tail,
         "user_text": text,
         "rag_hits": rag_hits,
         "junior_json": jr,
