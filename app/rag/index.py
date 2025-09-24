@@ -59,8 +59,8 @@ def search(query: str, k: int = 6) -> List[Dict[str, Any]]:
     # read meta
     meta_rows = [json.loads(line) for line in META_PATH.read_text(encoding="utf-8").splitlines()]
     out = []
-    for idx in I[0]:
+    for dist, idx in zip(D[0], I[0]):
         if idx<0 or idx>=len(meta_rows): continue
         m = meta_rows[idx]
-        out.append({"id": m["id"], "text": m["text"], "meta": m.get("meta",{}), "score": float(1.0)})
+        out.append({"id": m["id"], "text": m["text"], "meta": m.get("meta",{}), "score": float(dist)})
     return out

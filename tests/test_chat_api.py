@@ -13,7 +13,7 @@ def test_chat_endpoint_stub(monkeypatch):
     monkeypatch.setattr("app.server.main.handle_user", fake_handle_user)
 
     payload = ChatIn(user_id="u1", text="hello")
-    r = c.post("/chat", c=payload)
+    r = c.post("/chat", json=payload.dict())
     assert r.status_code == 200
     j = r.json()
     assert j["text"] == "stub reply"

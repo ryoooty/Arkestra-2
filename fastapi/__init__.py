@@ -1,6 +1,12 @@
 """Minimal FastAPI stub for tests without external dependency."""
 
 from typing import Any, Callable, Dict, Tuple
+import inspect
+
+try:
+    from pydantic import BaseModel
+except Exception:  # pragma: no cover - optional dependency during tests
+    BaseModel = None  # type: ignore[misc,assignment]
 
 RouteKey = Tuple[str, str]
 
@@ -76,6 +82,34 @@ class FastAPI:
         if entry is None:
             raise KeyError(f"Route not found for {method} {path}")
         handler, default_status = entry
+        json_payload = kwargs.pop("json", None)
+        if json_payload is not None:
+            sig = inspect.signature(handler)
+            params = [
+                p
+                for p in sig.parameters.values()
+                if p.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+                and p.name not in kwargs
+            ]
+            if len(params) == 1:
+                param = params[0]
+                value = json_payload
+                if (
+                    BaseModel is not None
+                    and isinstance(param.annotation, type)
+                    and issubclass(param.annotation, BaseModel)
+                    and isinstance(json_payload, dict)
+                ):
+                    value = param.annotation(**json_payload)
+                kwargs[param.name] = value
+            elif isinstance(json_payload, dict):
+                for name, param in sig.parameters.items():
+                    if (
+                        name not in kwargs
+                        and param.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+                        and name in json_payload
+                    ):
+                        kwargs[name] = json_payload[name]
         try:
             result = handler(**kwargs)
         except HTTPException as exc:  # pragma: no cover - simple exception handling

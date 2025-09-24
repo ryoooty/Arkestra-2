@@ -19,7 +19,7 @@ def test_tools_crud(tmp_path, monkeypatch):
         entrypoint="app.tools.test:main",
         enabled=True,
     )
-    r = c.post("/tools", t=t)
+    r = c.post("/tools", json=t.dict())
     assert r.status_code == 201
     # list
     r = c.get("/tools")
