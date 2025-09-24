@@ -90,6 +90,15 @@ CREATE TABLE IF NOT EXISTS sleep_batches(
   processed_count INTEGER,
   status TEXT
 );
+CREATE TABLE IF NOT EXISTS reminders(
+  id INTEGER PRIMARY KEY,
+  user_id TEXT,
+  title TEXT,
+  when_ts DATETIME,
+  channel TEXT DEFAULT 'cli',
+  status TEXT DEFAULT 'scheduled',
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 
