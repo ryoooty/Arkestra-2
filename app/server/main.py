@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
 from app.memory.db import get_conn, migrate, get_tool_instructions, upsert_bandit, add_feedback, mark_approved
 from app.core.logs import log
+from app.core.orchestrator import handle_user
 
 
 templates = Jinja2Templates(directory="app/server/templates")
@@ -24,6 +25,14 @@ class ToolIn(BaseModel):
     enabled: bool = True
 
 
+class ChatIn(BaseModel):
+    user_id: str
+    text: str
+    channel: str = "api"
+    chat_id: Optional[str] = None
+    participants: Optional[List[str]] = None
+
+
 class ToolUpdate(BaseModel):
     title: Optional[str] = None
     description: Optional[str] = None
@@ -36,6 +45,23 @@ class ToolUpdate(BaseModel):
 def _startup():
     migrate()
     log.info("DB migrated. Admin API ready.")
+
+
+@app.post("/chat")
+def chat_endpoint(req: ChatIn):
+    if isinstance(req, dict):
+        req = ChatIn(**req)
+
+    chat_id = req.chat_id or req.user_id
+    participants = req.participants
+    result = handle_user(
+        req.user_id,
+        req.text,
+        channel=req.channel or "api",
+        chat_id=chat_id,
+        participants=participants,
+    )
+    return result or {"text": ""}
 
 
 # --- Tools CRUD ---
@@ -58,6 +84,8 @@ def get_tool(name: str):
 
 @app.post("/tools", status_code=201)
 def create_tool(t: ToolIn):
+    if isinstance(t, dict):
+        t = ToolIn(**t)
     with get_conn() as c:
         try:
             c.execute(
@@ -71,6 +99,8 @@ def create_tool(t: ToolIn):
 
 @app.put("/tools/{name}")
 def update_tool(name: str, u: ToolUpdate):
+    if isinstance(u, dict):
+        u = ToolUpdate(**u)
     sets, vals = [], []
     for k, v in u.dict(exclude_unset=True).items():
         sets.append(f"{k}=?")
@@ -180,6 +210,8 @@ class FeedbackIn(BaseModel):
 
 @app.post("/feedback")
 def submit_feedback(fb: FeedbackIn):
+    if isinstance(fb, dict):
+        fb = FeedbackIn(**fb)
     add_feedback(fb.msg_id, fb.kind, fb.text)
     if fb.intent and fb.suggestion_kind:
         reward = 1 if fb.kind == "up" else (-1 if fb.kind == "down" else 0)
