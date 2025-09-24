@@ -10,6 +10,7 @@ import sys
 from typing import Iterable
 
 from app.core.orchestrator import handle_user
+from scripts.consolidate_sleep import run_sleep_batch
 
 _HOTKEY_PROMPT = "Feedback [↑ like, ↓ dislike, e edit, Enter skip]: "
 _ESCAPE_PREFIX = "\x1b"
@@ -35,6 +36,11 @@ def main() -> None:
 
         if text.strip().lower() in {"quit", "exit"}:
             break
+
+        if text.strip() == "/sleep":
+            run_sleep_batch()
+            print("💤 sleep batch done.")
+            continue
 
         result = handle_user(user_id, text, channel="cli", chat_id="local") or {}
         _display_result(result)
