@@ -1,18 +1,22 @@
-"""
-router.py — RAG-маршрутизация + реранк (e5-small).
-Шаги: primary search (FAISS/BM25) → concat → rerank_e5(query, docs) → trim_to_budget().
-Настройки в config/router.yaml: targets, window_days, top_k, rerank_top_k.
-"""
-
 from typing import List, Dict
 
 
+# Заглушка индексов: возвращаем фиктивные документы с полем 'score'
+# Позже подключите FAISS/BM25 + e5-small.
 def search(query: str, intent: str) -> List[Dict]:
-    # 1) выбрать индексы по intent (short/temp/long/jokes)
-    # 2) получить первичные кандидаты (top_k)
-    # 3) rerank_e5() и вернуть rerank_top_k
-    raise NotImplementedError
+    if not query:
+        return []
+    # pretend candidates
+    candidates = [
+        {"id": "doc1", "text": "Вчера обсуждали авто-сон и переносы памяти.", "score": 0.62},
+        {"id": "doc2", "text": "Планируем добавить rerank e5-small для RAG.", "score": 0.71},
+        {"id": "doc3", "text": "Junior генерирует style_directive и neuro_update.", "score": 0.55},
+    ]
+    reranked = rerank_e5(query, candidates, top_k=2)
+    return reranked
 
 
 def rerank_e5(query: str, docs: List[Dict], top_k: int) -> List[Dict]:
-    raise NotImplementedError
+    # Заглушка: просто сортировка по 'score' у кандидатов.
+    docs_sorted = sorted(docs, key=lambda d: d.get("score", 0), reverse=True)
+    return docs_sorted[:top_k]
