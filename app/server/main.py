@@ -1,3 +1,4 @@
+
 from fastapi import FastAPI, HTTPException
 from fastapi import Request, Form
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -7,10 +8,12 @@ from typing import List, Optional, Dict, Any
 from app.memory.db import get_conn, migrate, get_tool_instructions, upsert_bandit, add_feedback, mark_approved
 from app.core.logs import log
 
-app = FastAPI(title="Arkestra Admin API", version="1.0")
 
 templates = Jinja2Templates(directory="app/server/templates")
 
+
+
+app = FastAPI(title="Arkestra Admin API", version="1.0")
 
 class ToolIn(BaseModel):
     name: str = Field(..., regex=r"^[a-z0-9._\-]+$")
@@ -231,3 +234,4 @@ def metrics():
         f'arkestra_errors_total {_METRICS["errors_total"]}',
     ]
     return "\n".join(lines)
+
