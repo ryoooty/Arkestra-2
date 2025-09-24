@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+pydantic
+jsonschema
+apscheduler
+# sentence-transformers
+# faiss-cpu
