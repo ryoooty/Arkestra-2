@@ -46,6 +46,13 @@ CREATE TABLE IF NOT EXISTS feedback(
   text TEXT,
   ts DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS messages_meta(
+  msg_id INTEGER,
+  key TEXT,
+  value TEXT,
+  PRIMARY KEY(msg_id, key),
+  FOREIGN KEY(msg_id) REFERENCES messages(id) ON DELETE CASCADE
+);
 CREATE TABLE IF NOT EXISTS neuro_logs(
   id INTEGER PRIMARY KEY,
   session_id TEXT,
@@ -156,6 +163,24 @@ def add_feedback(msg_id: int, kind: str, text: str | None = None) -> int:
             (msg_id, kind, text),
         )
         return cur.lastrowid
+
+
+def set_message_meta(msg_id: int, key: str, value: str) -> None:
+    with get_conn() as c:
+        c.execute(
+            "INSERT INTO messages_meta(msg_id, key, value) VALUES (?,?,?) "
+            "ON CONFLICT(msg_id, key) DO UPDATE SET value=excluded.value",
+            (msg_id, key, value),
+        )
+
+
+def get_message_meta(msg_id: int) -> Dict[str, str]:
+    with get_conn() as c:
+        cur = c.execute(
+            "SELECT key, value FROM messages_meta WHERE msg_id=?",
+            (msg_id,),
+        )
+        return {row["key"]: row["value"] for row in cur.fetchall()}
 
 
 def mark_approved(msg_id: int, approved: int = 1) -> None:

@@ -1,6 +1,6 @@
 from typing import Dict, Any, List
 
-from app.memory.db import insert_message, get_last_messages
+from app.memory.db import insert_message, get_last_messages, set_message_meta
 from app.memory.db import get_tool_instructions
 from app.core.env_state import ensure_env_session
 from app.core import neuro
@@ -15,6 +15,7 @@ from app.agents.senior import (
 from app.core.budget import trim as pack_budget
 from app.core.tokens import count_struct
 from app.core.logs import log, span
+from app.core.bandit import pick as bandit_pick
 
 
 def handle_user(
@@ -66,7 +67,26 @@ def handle_user(
                 "neuro_update": {"levels": neuro.snapshot()},
             }
 
+    bandit_intent = "task"
+    bandit_chosen_kind: str | None = None
     tools_req = jr.get("tools_request", []) if jr else []
+    if jr:
+        bandit_intent = jr.get("intent") or bandit_intent
+        suggestions = jr.get("suggestions")
+        if isinstance(suggestions, list) and suggestions:
+            chosen = jr.get("chosen_suggestion") if isinstance(jr.get("chosen_suggestion"), dict) else None
+            if not chosen:
+                try:
+                    chosen = bandit_pick(bandit_intent, suggestions)
+                except Exception:
+                    chosen = None
+                if chosen:
+                    jr["chosen_suggestion"] = chosen
+            if isinstance(chosen, dict):
+                bandit_chosen_kind = chosen.get("kind")
+            if bandit_chosen_kind is None:
+                first = suggestions[0] if isinstance(suggestions[0], dict) else {}
+                bandit_chosen_kind = first.get("kind", "good")
     catalog_names = {t["name"] for t in jr_payload["tools_catalog"]}
     missing = [
         r
@@ -148,7 +168,9 @@ def handle_user(
         base_text = reply.get("text", "") if reply else ""
         final_text, hits = soft_censor(base_text)
     assistant_msg_id = insert_message(user_id, "assistant", final_text)
-    bandit_kind = None
+    bandit_kind = bandit_chosen_kind
+    if not bandit_kind:
+        bandit_kind = "good" if tool_calls else "mischief"
     # fast bandit update if junior had suggestions
     try:
         if jr and jr.get("suggestions"):
@@ -156,6 +178,18 @@ def handle_user(
             bandit_kind = chosen.get("kind") or (tool_calls and "good" or "mischief") or "good"
     except Exception:
         bandit_kind = None
+
+    if not bandit_kind:
+        bandit_kind = bandit_chosen_kind or ("good" if tool_calls else "mischief")
+    if not bandit_kind:
+        bandit_kind = "good"
+
+    try:
+        set_message_meta(assistant_msg_id, "last_intent", str(bandit_intent))
+        if bandit_kind:
+            set_message_meta(assistant_msg_id, "last_kind", str(bandit_kind))
+    except Exception:
+        log.exception("failed to store bandit metadata")
 
     return {
         "text": final_text,
