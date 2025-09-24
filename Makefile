@@ -1,4 +1,4 @@
-.PHONY: run api migrate sleep seed test
+.PHONY: run api migrate sleep seed test docker-build docker-run
 
 run:
 python -m app.io.cli
@@ -17,3 +17,9 @@ python -m scripts.seed_rag
 
 test:
 pytest -q
+
+docker-build:
+docker build -t arkestra:latest .
+
+docker-run:
+docker run --rm -p 8080:8080 arkestra:latest
