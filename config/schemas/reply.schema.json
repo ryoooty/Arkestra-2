@@ -1,0 +1,12 @@
+{
+  "$id":"reply.schema.json",
+  "type":"object",
+  "required":["schema_version","text"],
+  "properties":{
+    "schema_version":{"type":"string"},
+    "text":{"type":"string"},
+    "tool_calls":{"type":"array"},
+    "memory":{"type":"array"},
+    "plan":{"type":"array"}
+  }
+}

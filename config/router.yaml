@@ -1,0 +1,9 @@
+# router.yaml — маршрутизация RAG
+defaults:
+  top_k: 3
+  window_days: 45
+routes:
+  task:
+    targets: [short, temp]
+  joke:
+    targets: [jokes]

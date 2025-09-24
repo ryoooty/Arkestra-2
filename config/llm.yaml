@@ -1,0 +1,7 @@
+# llm.yaml — конфиг моделей
+junior:
+  model_id: "small-cpu-model"
+  max_new_tokens: 64
+senior:
+  model_id: "mistral-7b"
+  temperature: 0.8
