@@ -1,0 +1,12 @@
+profanities:
+  - "(?i)\\bбля(т|д)\\b"
+  - "(?i)\\bсука\\b"
+  - "(?i)\\bfuck\\b"
+  - "(?i)\\bshit\\b"
+replacements:
+  profanity_mask: "***"
+mask_pii:
+  email: true
+  phone: true
+style:
+  soften_ack: true   # добавлять короткое "сорян, заменила парочку слов → ***" когда есть срабатывания
