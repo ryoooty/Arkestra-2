@@ -1,6 +1,7 @@
 from typing import Dict, Any, List
 
 from app.memory.db import insert_message
+from app.memory.db import get_tool_instructions
 from app.core.env_state import ensure_env_session
 from app.core import neuro
 from app.core.router import search as rag_search
@@ -65,8 +66,9 @@ def handle_user(
         "preset": preset,
         "style_directive": jr.get("style_directive", "") if jr else "",
         "env_brief": env_brief,
-        "tool_instructions": {},  # TODO: pull from DB 'tools' table
     }
+    tool_instr = get_tool_instructions(jr.get("tools_hint", [])) if jr else {}
+    sr_payload["tool_instructions"] = tool_instr
     reply = sr_generate(sr_payload)
 
     # 6) tools
