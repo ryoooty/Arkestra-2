@@ -9,39 +9,50 @@ class FastAPI:
     """Very small subset of FastAPI used in unit tests."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
-        self._routes: Dict[RouteKey, Callable[..., Any]] = {}
+        self._routes: Dict[RouteKey, tuple[Callable[..., Any], int | None]] = {}
         self._events: Dict[str, list[Callable[..., Any]]] = {}
         self._middleware: Dict[str, list[Callable[..., Any]]] = {}
 
-    def _register(self, method: str, path: str, func: Callable[..., Any]) -> Callable[..., Any]:
-        self._routes[(method.upper(), path)] = func
+    def _register(
+        self,
+        method: str,
+        path: str,
+        func: Callable[..., Any],
+        *,
+        status_code: int | None = None,
+    ) -> Callable[..., Any]:
+        self._routes[(method.upper(), path)] = (func, status_code)
         return func
 
-    def get(self, path: str, **_kwargs: Any) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+    def get(self, path: str, **kwargs: Any) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
         """Register a GET route."""
 
         def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
-            return self._register("GET", path, func)
+            status_code = kwargs.pop("status_code", None)
+            return self._register("GET", path, func, status_code=status_code)
 
         return decorator
 
-    def post(self, path: str, **_kwargs: Any) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+    def post(self, path: str, **kwargs: Any) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
         """Register a POST route."""
 
         def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
-            return self._register("POST", path, func)
+            status_code = kwargs.pop("status_code", None)
+            return self._register("POST", path, func, status_code=status_code)
 
         return decorator
 
-    def put(self, path: str, **_kwargs: Any) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+    def put(self, path: str, **kwargs: Any) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
         def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
-            return self._register("PUT", path, func)
+            status_code = kwargs.pop("status_code", None)
+            return self._register("PUT", path, func, status_code=status_code)
 
         return decorator
 
-    def delete(self, path: str, **_kwargs: Any) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+    def delete(self, path: str, **kwargs: Any) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
         def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
-            return self._register("DELETE", path, func)
+            status_code = kwargs.pop("status_code", None)
+            return self._register("DELETE", path, func, status_code=status_code)
 
         return decorator
 
@@ -61,14 +72,15 @@ class FastAPI:
 
     def _dispatch(self, method: str, path: str, **kwargs: Any) -> Tuple[int, Any, Dict[str, Any]]:
         key = (method.upper(), path)
-        handler = self._routes.get(key)
-        if handler is None:
+        entry = self._routes.get(key)
+        if entry is None:
             raise KeyError(f"Route not found for {method} {path}")
+        handler, default_status = entry
         try:
             result = handler(**kwargs)
         except HTTPException as exc:  # pragma: no cover - simple exception handling
             return exc.status_code, {"detail": exc.detail}, {}
-        status = 200
+        status = default_status or 200
         headers: Dict[str, Any] = {}
         body = result
         if isinstance(result, tuple):
