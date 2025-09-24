@@ -24,6 +24,20 @@ _MAX: Dict[str, int] = {}
 _BIAS: Dict[str, Dict[str, float]] = {}
 _SLEEP: Dict[str, int] = {}
 
+_ALIAS = {
+    "structure": "structure_bias",
+    "humor": "humor_bias",
+    "ask_clarify": "ask_clarify_bias",
+    "we_pronouns": "we_pronouns",
+    "positive_affect": "politeness",  # или сделай отдельный ключ, если нужно
+    "energy": "energy",
+    "assertiveness": "assertiveness",
+    "boundaries": "assertiveness",  # вклад в ту же ось
+    "memory_write_bias": "memory_write_bias",
+    "max_tokens": "max_tokens",
+    "temperature": "temperature",
+}
+
 
 def _load_persona():
     global _PERSONA, _MIN, _BASE, _MAX, _BIAS, _SLEEP, _LEVELS
@@ -86,10 +100,10 @@ def bias_to_style() -> Dict[str, float]:
         if med not in _BIAS:
             continue
         coef_map = _BIAS[med]
+        scale = (lvl - _BASE.get(med, 5)) / max((_MAX.get(med, 11) - _MIN.get(med, 1)), 1)
         for key, delta in coef_map.items():
-            out[key] = out.get(key, 0.0) + float(delta) * (
-                (lvl - _BASE.get(med, 5)) / max((_MAX.get(med, 11) - _MIN.get(med, 1)), 1)
-            )
+            out_key = _ALIAS.get(key, key)
+            out[out_key] = out.get(out_key, 0.0) + float(delta) * scale
     out["temperature"] = max(0.1, min(1.2, out.get("temperature", 0.7)))
     out["max_tokens"] = int(max(128, min(1024, 512 + out.get("max_tokens", 0))))
     return out
