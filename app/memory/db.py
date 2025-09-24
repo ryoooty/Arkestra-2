@@ -102,6 +102,15 @@ def migrate() -> None:
         c.executescript(SCHEMA_SQL)
 
 
+def get_tool_instructions(names: list[str]) -> dict:
+    if not names:
+        return {}
+    qmarks = ",".join("?" for _ in names)
+    with get_conn() as c:
+        cur = c.execute(f"SELECT name,instruction FROM tools WHERE enabled=1 AND name IN ({qmarks})", names)
+        return {r["name"]: r["instruction"] for r in cur.fetchall()}
+
+
 def upsert_bandit(intent: str, kind: str, wins_delta: float, plays_delta: float) -> None:
     with get_conn() as c:
         cur = c.execute("SELECT wins,plays FROM bandit_stats WHERE intent=? AND kind=?", (intent, kind))
