@@ -6,6 +6,8 @@ from scripts.consolidate_sleep import run_sleep_batch
 
 
 def main():
+    init_scheduler()
+
     user_id = "local-user"
     init_scheduler()
     print("Arkestra CLI. Type 'quit' to exit. Commands: /up /down /fb <text> /ok")
