@@ -1,12 +1,18 @@
+
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
 from app.memory.db import get_conn, migrate, get_tool_instructions, upsert_bandit, add_feedback, mark_approved
 from app.core.logs import log
 
+
+
+
 app = FastAPI(title="Arkestra Admin API", version="1.0")
 
-
+@app.get("/health")
+def health() -> dict:
+    return {"ok": True}
 class ToolIn(BaseModel):
     name: str = Field(..., regex=r"^[a-z0-9._\-]+$")
     title: str
@@ -161,3 +167,4 @@ def metrics():
         f'arkestra_errors_total {_METRICS["errors_total"]}',
     ]
     return "\n".join(lines)
+

@@ -1,8 +1,20 @@
 """Модуль управления нейромедиаторами и стилем общения."""
 
-import yaml
 from typing import Dict
 from pathlib import Path
+
+try:  # pragma: no cover - optional dependency
+    import yaml  # type: ignore
+except ModuleNotFoundError:  # pragma: no cover - fallback
+    yaml = None
+
+    from app.util import simple_yaml
+
+    def _load_yaml(path: Path):
+        return simple_yaml.loads(path.read_text(encoding='utf-8'))
+else:
+    def _load_yaml(path: Path):
+        return yaml.safe_load(path.read_text(encoding='utf-8'))
 
 _PERSONA = None
 _LEVELS: Dict[str, int] = {}
@@ -16,7 +28,7 @@ _SLEEP: Dict[str, int] = {}
 def _load_persona():
     global _PERSONA, _MIN, _BASE, _MAX, _BIAS, _SLEEP, _LEVELS
     if _PERSONA is None:
-        data = yaml.safe_load(Path("config/persona.yaml").read_text(encoding="utf-8"))
+        data = _load_yaml(Path('config/persona.yaml'))
         _PERSONA = data
         _MIN = data["neuro_baselines"]["min"]
         _BASE = data["neuro_baselines"]["base"]
