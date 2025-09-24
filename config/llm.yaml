@@ -2,7 +2,9 @@ junior:
   model_id: "deepseek-r1-1_5b"   # или любая ≤3B
   max_new_tokens: 64
   temperature: 0.2
+  endpoint: "https://api.your-llm-provider.example/v1/chat/completions"
 senior:
   model_id: "mistral-7b"
   temperature: 0.7
   max_new_tokens: 512
+  endpoint: "https://api.your-llm-provider.example/v1/chat/completions"
