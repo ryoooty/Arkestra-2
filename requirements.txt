@@ -4,8 +4,15 @@ pydantic
 jsonschema
 apscheduler
 tiktoken
-llama-cpp-python
-torch==2.3.1  # CUDA 12.1 build
+PyYAML>=6.0.1
+llama-cpp-python>=0.2.90
+torch==2.3.1+cu121  # CUDA 12.1 build
 transformers>=4.44.0
+bitsandbytes==0.43.1
+accelerate>=0.33.0
 sentence-transformers>=2.7.0
-# faiss-cpu
+datasets>=2.20.0
+peft>=0.11.1
+trl>=0.9.6
+faiss-cpu
+huggingface_hub>=0.23.4

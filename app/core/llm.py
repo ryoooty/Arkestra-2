@@ -9,8 +9,8 @@ import yaml
 
 _CFG: Optional[Dict[str, Any]] = None
 _LLAMA_JUNIOR: Optional[Any] = None
-_SENIOR_MODEL: Optional[Any] = None
-_SENIOR_TOKENIZER: Optional[Any] = None
+_senior_mdl: Optional[Any] = None
+_senior_tok: Optional[Any] = None
 
 
 def _load_cfg() -> Dict[str, Any]:
@@ -119,14 +119,12 @@ def _generate_with_transformers(
 ) -> str:
     """Generate a completion using a cached Hugging Face transformers model."""
 
-    global _SENIOR_MODEL, _SENIOR_TOKENIZER
-    if _SENIOR_MODEL is None or _SENIOR_TOKENIZER is None:
+    global _senior_mdl, _senior_tok
+    if _senior_mdl is None or _senior_tok is None:
         import torch
         from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
-        model_id = cfg.get("model_id")
-        if not model_id:
-            raise ValueError("senior transformers configuration requires 'model_id'")
+        model_id = cfg.get("model_id") or "mistralai/Mistral-7B-Instruct-v0.3"
 
         quant_config = BitsAndBytesConfig(
             load_in_4bit=True,
@@ -134,21 +132,19 @@ def _generate_with_transformers(
             bnb_4bit_use_double_quant=True,
             bnb_4bit_compute_dtype=torch.bfloat16,
         )
-        _SENIOR_TOKENIZER = AutoTokenizer.from_pretrained(model_id)
-        _SENIOR_MODEL = AutoModelForCausalLM.from_pretrained(
+        _senior_tok = AutoTokenizer.from_pretrained(model_id, use_fast=True)
+        _senior_mdl = AutoModelForCausalLM.from_pretrained(
             model_id,
             quantization_config=quant_config,
             device_map="auto",
         )
 
-    tokenizer = _SENIOR_TOKENIZER
-    model = _SENIOR_MODEL
+    tokenizer = _senior_tok
+    model = _senior_mdl
 
     default_temp = cfg.get("temperature", 0.7)
     default_max_tokens = cfg.get("max_new_tokens", 256)
     inputs = tokenizer(prompt, return_tensors="pt")
-
-    import torch
 
     target_device = None
     if hasattr(model, "device"):
@@ -157,6 +153,8 @@ def _generate_with_transformers(
         try:
             target_device = next(model.parameters()).device
         except StopIteration:
+            import torch
+
             target_device = torch.device("cpu")
 
     if target_device is not None:
