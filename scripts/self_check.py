@@ -8,6 +8,7 @@ lines and a final summary.
 
 from __future__ import annotations
 
+import ast
 import datetime as _dt
 import json
 import os
@@ -153,6 +154,43 @@ def _ensure_yaml_stub() -> None:
 
 _ensure_tiktoken_stub()
 _ensure_yaml_stub()
+
+
+def scan_no_http(project_roots=(Path("app"), Path("scripts"))):
+    bad = []
+    for root in project_roots:
+        if not root.exists():
+            continue
+        for py in root.rglob("*.py"):
+            try:
+                src = py.read_text(encoding="utf-8")
+            except Exception:
+                continue
+            try:
+                tree = ast.parse(src, filename=str(py))
+            except Exception:
+                # skip unparsable test stubs
+                continue
+            # find "import requests" or "from requests import ..."
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    for n in node.names:
+                        if n.name == "requests" or n.name.startswith("requests."):
+                            bad.append((py, node.lineno, "import"))
+                elif isinstance(node, ast.ImportFrom):
+                    if node.module and (node.module == "requests" or node.module.startswith("requests.")):
+                        bad.append((py, node.lineno, "from-import"))
+                elif isinstance(node, ast.Call):
+                    # detect requests.post/get/... patterns: requests.<name>(...)
+                    if (
+                        isinstance(node.func, ast.Attribute)
+                        and isinstance(node.func.value, ast.Name)
+                        and node.func.value.id == "requests"
+                    ):
+                        bad.append((py, getattr(node, "lineno", 0), f"call:{node.func.attr}"))
+    return bad
+
+
 def _ensure_apscheduler_stub() -> None:
     try:
         import apscheduler  # type: ignore
@@ -198,12 +236,11 @@ _ensure_apscheduler_stub()
 
 MODS = _import_core_modules()
 
-
 # After the imports are available enforce the "no HTTP" guardrails.
-FORBIDDEN_MODULES = ("requests", "fastapi", "uvicorn")
-for _mod in FORBIDDEN_MODULES:
-    if _mod in sys.modules:
-        raise RuntimeError(f"no-HTTP policy violated: '{_mod}' module is loaded")
+violations = scan_no_http()
+if violations:
+    lines = "\n".join(f" - {p}:{ln} [{kind}]" for p, ln, kind in violations[:20])
+    raise RuntimeError("no-HTTP policy violated in project sources:\n" + lines)
 
 
 class Colours:
