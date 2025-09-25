@@ -4,5 +4,8 @@ pydantic
 jsonschema
 apscheduler
 tiktoken
-# sentence-transformers
+llama-cpp-python
+torch==2.3.1  # CUDA 12.1 build
+transformers>=4.44.0
+sentence-transformers>=2.7.0
 # faiss-cpu
