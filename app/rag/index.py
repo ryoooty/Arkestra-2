@@ -80,7 +80,8 @@ def add_texts(X: np.ndarray, encoder_name: str | None = None) -> None:
 
     global _index, _mem
 
-    encoder_value = encoder_name or "unknown"
+    if np is None:
+        raise RuntimeError("NumPy is required for FAISS indexing but is not available")
 
     rows: Sequence[Dict[str, Any]] | None = None
 
@@ -90,34 +91,41 @@ def add_texts(X: np.ndarray, encoder_name: str | None = None) -> None:
         if not HAVE_FAISS:
             _write_rows(rows)
             return
-        if np is None:
-            raise RuntimeError(
-                "NumPy is required for FAISS indexing but is not available"
-            )
-        vecs = encode([r["text"] for r in rows])
-        X = np.asarray(vecs, dtype=np.float32)
+        vectors = encode([row["text"] for row in rows])
+        X = np.asarray(vectors, dtype=np.float32)
+        if encoder_name is None:
+            from app.rag.encoders import get_encoder_name  # local import to avoid cycle
+
+            encoder_name = get_encoder_name()
     else:
-        if np is None:
-            raise RuntimeError(
-                "NumPy is required for FAISS indexing but is not available"
-            )
         X = np.asarray(X, dtype=np.float32)
 
     if X.ndim != 2:
         raise ValueError("Expected embeddings with shape (n, d)")
 
-    X = np.ascontiguousarray(X)
+    X = np.ascontiguousarray(X, dtype=np.float32)
 
     if not HAVE_FAISS:
         return
 
     _ensure_data_dir()
 
+    dim = int(X.shape[1])
+
+    existing_dim = None
+    if INFO_PATH.exists():
+        try:
+            meta_data = json.loads(INFO_PATH.read_text(encoding="utf-8"))
+            existing_dim = int(meta_data.get("dim", dim))
+        except Exception:
+            existing_dim = None
+
     index = _index or _load_index_from_disk()
 
-    dim = X.shape[1]
-
-    if index is not None and getattr(index, "d", None) != dim:
+    if existing_dim is not None and existing_dim != dim:
+        reset_index()
+        index = None
+    elif index is not None and getattr(index, "d", None) != dim:
         reset_index()
         index = None
 
@@ -126,7 +134,7 @@ def add_texts(X: np.ndarray, encoder_name: str | None = None) -> None:
 
     index.add(X)
     faiss.write_index(index, str(INDEX_PATH))
-    _write_meta(dim, encoder_value)
+    _write_meta(dim, encoder_name or "unknown")
 
     if rows:
         _write_rows(rows)

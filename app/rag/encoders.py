@@ -44,16 +44,15 @@ def encode(texts: List[str]):
     if encoder_name == "qwen3-0.6b":
         vectors = _encode_with_qwen(texts)
         if vectors is not None:
+            _set_active_encoder("qwen3-0.6b")
             return vectors
         _reset_active_encoder()
         encoder_name = _resolve_encoder()
 
-    if encoder_name == "e5-small":
-        vectors = _encode_with_e5(texts)
-        if vectors is not None:
-            return vectors
-        _reset_active_encoder()
-        encoder_name = _resolve_encoder()
+    vectors = _encode_with_e5(texts)
+    if vectors is not None:
+        _set_active_encoder("e5-small-v2")
+        return vectors
 
     vectors = _encode_with_hash(texts)
     _set_active_encoder("hash")
@@ -119,10 +118,13 @@ def _encode_with_hash(texts: List[str]):
 @lru_cache(maxsize=1)
 def _get_encoder_name() -> str:
     config = _load_rag_config()
-    value = config.get("encoder", "e5-small")
+    value = config.get("encoder", "e5-small-v2")
     if isinstance(value, str):
-        return value.lower()
-    return "e5-small"
+        lowered = value.lower()
+        if lowered == "qwen3-0.6b":
+            return "qwen3-0.6b"
+        return "e5-small-v2"
+    return "e5-small-v2"
 
 
 @lru_cache(maxsize=1)
@@ -211,32 +213,23 @@ def _resolve_encoder() -> str:
         if tokenizer is not None and model is not None:
             _set_active_encoder("qwen3-0.6b")
             return "qwen3-0.6b"
-        encoder = "e5-small"
-
-    if encoder == "e5-small":
-        if _load_e5() is not None:
-            _set_active_encoder("e5-small")
-            return "e5-small"
 
     if _load_e5() is not None:
-        _set_active_encoder("e5-small")
-        return "e5-small"
+        _set_active_encoder("e5-small-v2")
+        return "e5-small-v2"
 
     _set_active_encoder("hash")
     return "hash"
 
 
-def _set_active_encoder(name: str) -> None:
+def _set_active_encoder(name: Optional[str]) -> None:
     global _active_encoder
     _active_encoder = name
 
 
 def _reset_active_encoder() -> None:
-    global _active_encoder
-    _active_encoder = None
+    _set_active_encoder(None)
 
 
 def get_encoder_name() -> str:
-    if _active_encoder is not None:
-        return _active_encoder
     return _resolve_encoder()
