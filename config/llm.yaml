@@ -1,9 +1,11 @@
 junior:
   provider: "llama-cpp"
   model_path: "C:\\Users\\kosha\\models\\gemma3n-e4b\\google_gemma-3n-E4B-it-Q4_K_M.gguf"
+  n_ctx: 4096
+  n_gpu_layers: -1
   temperature: 0.2
-  max_new_tokens: 64
-  stop: ["\n\n","```"]
+  max_new_tokens: 160
+  stop: ["</json>"]
 senior:
   provider: "transformers"
   model_path: "C:\\Users\\kosha\\models\\mistral-7b-instruct-v0_3"
