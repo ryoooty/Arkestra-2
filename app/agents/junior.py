@@ -16,24 +16,65 @@ import re, json
 from textwrap import dedent
 from pathlib import Path
 from jsonschema import validate, ValidationError
+
+try:  # pragma: no cover - optional dependency for runtime GPU inference
+    from llama_cpp import LlamaGrammar
+except ModuleNotFoundError:  # pragma: no cover
+    LlamaGrammar = None  # type: ignore
+
 from app.core.llm import generate as llm_generate
 
-STRICT_JSON_JR = dedent("""Return ONLY valid JSON (double quotes), no markdown, no code fences.
-Wrap JSON in <json> and </json>. No extra text.
-Schema:
-{
-  "intent": "smalltalk|ask|task|joke|other",
-  "suggestions": [{"kind":"good","text":"..."},{"kind":"mischief","text":"..."}],
-  "rag_query": null | string,
-  "rag_targets": null | string[],
-  "style_directive": string | null,
-  "memory_hint": string[],
-  "neuro_update": { "levels": { "dopamine":int,"serotonin":int,"norepinephrine":int,"acetylcholine":int } },
-  "proactive": {"allow":bool,"reason":string,"cooldown_s":int},
-  "tools_hint": string | null,
-  "tools_request": null | string[]
+JR_JSON_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "intent": {"type": "string"},
+        "suggestions": {"type": "array"},
+        "rag_query": {"type": ["string", "null"]},
+        "rag_targets": {"type": ["array", "null"]},
+        "style_directive": {"type": ["string", "null"]},
+        "memory_hint": {"type": "array"},
+        "neuro_update": {
+            "type": "object",
+            "properties": {
+                "levels": {
+                    "type": "object",
+                    "properties": {
+                        "dopamine": {"type": "integer"},
+                        "serotonin": {"type": "integer"},
+                        "norepinephrine": {"type": "integer"},
+                        "acetylcholine": {"type": "integer"},
+                    },
+                    "required": [
+                        "dopamine",
+                        "serotonin",
+                        "norepinephrine",
+                        "acetylcholine",
+                    ],
+                }
+            },
+            "required": ["levels"],
+        },
+        "proactive": {
+            "type": "object",
+            "properties": {
+                "allow": {"type": "boolean"},
+                "reason": {"type": "string"},
+                "cooldown_s": {"type": "integer"},
+            },
+            "required": ["allow", "reason", "cooldown_s"],
+        },
+        "tools_hint": {"type": ["string", "null"]},
+        "tools_request": {"type": ["array", "null"]},
+    },
+    "required": ["intent", "suggestions", "memory_hint", "neuro_update", "proactive"],
 }
-""")
+
+STRICT_JSON_JR = dedent(
+    """Return ONLY valid JSON according to the schema.
+No markdown, no code fences, no extra text. Output must be inside <json>...</json>."""
+)
+
+JR_GRAMMAR = LlamaGrammar.from_json_schema(JR_JSON_SCHEMA) if LlamaGrammar else None
 
 
 def _extract_json(raw: str) -> str | None:
@@ -81,10 +122,21 @@ def generate(payload: Dict[str, Any]) -> Dict[str, Any]:
     raw = llm_generate(
         "junior",
         prompt,
-        max_new_tokens=128,
+        max_new_tokens=160,
         temperature=0.2,
-        stop=["</json>", "\n```", "\n\n"],
+        stop=["</json>"],
+        grammar=JR_GRAMMAR,
+        repeat_penalty=1.1,
     )
+    if not raw.strip():
+        raw_dbg = llm_generate(
+            "junior",
+            prompt,
+            max_new_tokens=80,
+            temperature=0.3,
+            stop=[],
+        )
+        raise RuntimeError(f"Junior produced empty output; dbg:\n{raw_dbg[:500]}")
     if raw and not raw.strip().endswith("</json>"):
         raw = raw.strip() + "</json>"
 

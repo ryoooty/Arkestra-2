@@ -57,6 +57,8 @@ def _generate_with_llama_cpp(
     stop: Optional[List[str]],
     max_new_tokens: Optional[int],
     temperature: Optional[float],
+    grammar: Optional[Any],
+    repeat_penalty: Optional[float],
 ) -> str:
     global _LLAMA_JR
     from llama_cpp import Llama
@@ -66,26 +68,50 @@ def _generate_with_llama_cpp(
         raise ValueError(f"Junior GGUF not found: {model_path}")
 
     if _LLAMA_JR is None:
-        _LLAMA_JR = Llama(model_path=model_path, n_ctx=4096, n_threads=int(cfg.get("n_threads", 12)))
+        _LLAMA_JR = Llama(
+            model_path=model_path,
+            n_ctx=int(cfg.get("n_ctx", 2048)),
+            n_threads=min(12, os.cpu_count() or 8),
+            n_gpu_layers=int(cfg.get("n_gpu_layers", -1)),
+            chat_format=cfg.get("chat_format", "gemma"),
+            verbose=False,
+        )
 
-    base_stops = list(stop or cfg.get("stop") or [])
-    stops = base_stops + ["</json>", "`", "\n\n"]
+    stops = list(stop or cfg.get("stop") or [])
+    if role == "junior" and not stops:
+        stops = ["</json>"]
+
     if role == "junior":
-        requested_tokens = max_new_tokens if max_new_tokens is not None else cfg.get("max_new_tokens", 64)
+        requested_tokens = max_new_tokens if max_new_tokens is not None else cfg.get("max_new_tokens", 160)
         if requested_tokens is None:
-            requested_tokens = 64
-        max_tokens = max(128, int(requested_tokens))
+            requested_tokens = 160
+        max_tokens = max(160, int(requested_tokens))
     else:
         max_tokens = int(max_new_tokens if max_new_tokens is not None else cfg.get("max_new_tokens", 64))
-    out = _LLAMA_JR.create_chat_completion(
-        messages=[{"role": "user", "content": prompt}],
-        temperature=float(temperature if temperature is not None else cfg.get("temperature", 0.2)),
-        max_tokens=max_tokens,
-        stop=stops,
-    )
+
+    temperature_value = float(temperature if temperature is not None else cfg.get("temperature", 0.2))
+    repeat_penalty_value = repeat_penalty
+    if repeat_penalty_value is None:
+        repeat_penalty_value = cfg.get("repeat_penalty")
+    if repeat_penalty_value is None and role == "junior":
+        repeat_penalty_value = 1.1
+
+    completion_kwargs: Dict[str, Any] = {
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": temperature_value,
+        "max_tokens": max_tokens,
+    }
+    if stops:
+        completion_kwargs["stop"] = stops
+    if grammar is not None:
+        completion_kwargs["grammar"] = grammar
+    if repeat_penalty_value is not None:
+        completion_kwargs["repeat_penalty"] = float(repeat_penalty_value)
+
+    out = _LLAMA_JR.create_chat_completion(**completion_kwargs)
     text = out["choices"][0]["message"]["content"]
     trimmed = _apply_stops(text, stops)
-    if "</json>" in stops and "</json>" in text and "</json>" not in trimmed:
+    if stops and "</json>" in stops and "</json>" in text and "</json>" not in trimmed:
         trimmed = f"{trimmed}</json>"
     return trimmed
 
@@ -97,6 +123,8 @@ def _generate_with_transformers(
     stop: Optional[List[str]],
     max_new_tokens: Optional[int],
     temperature: Optional[float],
+    grammar: Optional[Any],
+    repeat_penalty: Optional[float],
 ) -> str:
     global _SEN_TOK, _SEN_MDL
 
@@ -143,6 +171,8 @@ def generate(
     temperature: Optional[float] = None,
     stop: Optional[List[str]] = None,
     repair: bool = False,
+    grammar: Optional[Any] = None,
+    repeat_penalty: Optional[float] = None,
 ) -> str:
     """Generate a local LLM response for the requested role."""
 
@@ -156,7 +186,25 @@ def generate(
     provider = cfg.get("provider", "")
 
     if provider == "llama-cpp":
-        return _generate_with_llama_cpp(cfg, role, prompt, stop, max_new_tokens, temperature)
+        return _generate_with_llama_cpp(
+            cfg,
+            role,
+            prompt,
+            stop,
+            max_new_tokens,
+            temperature,
+            grammar,
+            repeat_penalty,
+        )
     if provider == "transformers":
-        return _generate_with_transformers(cfg, role, prompt, stop, max_new_tokens, temperature)
+        return _generate_with_transformers(
+            cfg,
+            role,
+            prompt,
+            stop,
+            max_new_tokens,
+            temperature,
+            grammar,
+            repeat_penalty,
+        )
     raise ValueError(f"Unsupported provider: {provider}")
