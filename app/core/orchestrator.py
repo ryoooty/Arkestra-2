@@ -122,12 +122,20 @@ def handle_user(
     with span("neuro"):
         if jr and "neuro_update" in jr and "levels" in jr["neuro_update"]:
             neuro.set_levels(jr["neuro_update"]["levels"])
-        preset = neuro.bias_to_style()
-        preset_max_tokens = None
-        if isinstance(preset, dict):
-            preset_max_tokens = preset.get("max_tokens")
+        raw_preset = neuro.bias_to_style()
+        preset = dict(raw_preset) if isinstance(raw_preset, dict) else {}
+
+        # Normalise generation overrides so that downstream callers always
+        # receive sane values even if neuro returns junk or partial presets.
+        preset_temperature = preset.get("temperature")
+        if not isinstance(preset_temperature, (int, float)):
+            preset_temperature = _LLM_CFG.get("senior", {}).get("temperature", 0.7)
+        preset["temperature"] = float(preset_temperature)
+
+        preset_max_tokens = preset.get("max_tokens")
         if not isinstance(preset_max_tokens, int) or preset_max_tokens <= 0:
             preset_max_tokens = _SENIOR_MAX_NEW_TOKENS
+        preset["max_tokens"] = int(preset_max_tokens)
 
     # 4) RAG
     with span("rag"):
