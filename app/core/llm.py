@@ -18,6 +18,8 @@ _CFG: Optional[Dict[str, Any]] = None
 _LLAMA_JR = None
 _SEN_TOK = None
 _SEN_MDL = None
+_JR_TOK = None
+_JR_MDL = None
 
 
 def _load_cfg() -> Dict[str, Any]:
@@ -48,6 +50,97 @@ def _apply_stops(text: str, stops):
         if i != -1:
             cut = min(cut, i)
     return text[:cut]
+
+
+def _jr_load_transformers(cfg: Dict[str, Any]) -> None:
+    """Lazily load the junior transformers model in 4-bit quantization."""
+
+    global _JR_TOK, _JR_MDL
+
+    if _JR_MDL is not None and _JR_TOK is not None:
+        return
+
+    model_id = cfg.get("model_id")
+    if not model_id:
+        raise ValueError("Junior transformers configuration requires 'model_id'.")
+
+    dtype_cfg = cfg.get("torch_dtype", torch.float16)
+    if isinstance(dtype_cfg, str):
+        torch_dtype = getattr(torch, dtype_cfg, torch.float16)
+    else:
+        torch_dtype = dtype_cfg if isinstance(dtype_cfg, torch.dtype) else torch.float16
+
+    bnb = BitsAndBytesConfig(
+        load_in_4bit=bool(cfg.get("load_in_4bit", True)),
+        bnb_4bit_use_double_quant=True,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_compute_dtype=torch_dtype,
+    )
+
+    _JR_TOK = AutoTokenizer.from_pretrained(model_id, use_fast=True)
+    if _JR_TOK.pad_token is None and _JR_TOK.eos_token is not None:
+        _JR_TOK.pad_token = _JR_TOK.eos_token
+
+    _JR_MDL = AutoModelForCausalLM.from_pretrained(
+        model_id,
+        quantization_config=bnb,
+        device_map=cfg.get("device_map", "auto"),
+        torch_dtype=torch_dtype,
+    )
+
+
+def _jr_generate_transformers(
+    cfg: Dict[str, Any],
+    prompt: str,
+    stop: Optional[List[str]],
+    max_new_tokens: Optional[int],
+    temperature: Optional[float],
+    **_: Any,
+) -> str:
+    """Generate junior outputs using transformers backend."""
+
+    _jr_load_transformers(cfg)
+    tokenizer = _JR_TOK
+    model = _JR_MDL
+
+    if tokenizer is None or model is None:
+        raise RuntimeError("Junior transformers model failed to load.")
+
+    if cfg.get("use_chat_template", True):
+        messages = [
+            {"role": "system", "content": "You return ONLY JSON inside <json>...</json>."},
+            {"role": "user", "content": prompt},
+        ]
+        text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        inputs = tokenizer(text, return_tensors="pt")
+    else:
+        inputs = tokenizer(prompt, return_tensors="pt")
+
+    inputs = inputs.to(model.device)
+    input_length = inputs["input_ids"].shape[-1]
+
+    eos_token_id = tokenizer.eos_token_id
+    if eos_token_id is None:
+        if tokenizer.pad_token_id is not None:
+            eos_token_id = tokenizer.pad_token_id
+        else:
+            raise ValueError("Tokenizer requires an EOS or PAD token for generation.")
+
+    sampling_kwargs: Dict[str, Any] = {
+        "max_new_tokens": int(max_new_tokens if max_new_tokens is not None else cfg.get("max_new_tokens", 160)),
+        "do_sample": True,
+        "temperature": float(temperature if temperature is not None else cfg.get("temperature", 0.2)),
+        "top_p": 0.9,
+        "repetition_penalty": 1.05,
+        "pad_token_id": eos_token_id,
+        "eos_token_id": eos_token_id,
+    }
+
+    output = model.generate(**inputs, **sampling_kwargs)
+    generated_tokens = output[0][input_length:]
+    text = tokenizer.decode(generated_tokens, skip_special_tokens=True)
+
+    return _apply_stops(text, stop or [])
 
 
 def _generate_with_llama_cpp(
@@ -200,6 +293,18 @@ def generate(
 
     cfg = _model_cfg(role)
     provider = cfg.get("provider", "")
+
+    if role == "junior" and provider == "transformers":
+        return _jr_generate_transformers(
+            cfg,
+            prompt,
+            stop,
+            max_new_tokens,
+            temperature,
+            grammar=grammar,
+            repeat_penalty=repeat_penalty,
+            top_p=top_p,
+        )
 
     if provider == "llama-cpp":
         return _generate_with_llama_cpp(
