@@ -133,9 +133,10 @@ def generate_structured(payload: Dict[str, Any]) -> Dict[str, Any]:
     log.info("senior prompt preview: %s", prompt[:600].replace("\n", "\\n"))
     cfg = _CFG.get("senior", {})
     preset = payload.get("preset") or {}
-    temperature = preset.get("temperature")
-    if not isinstance(temperature, (int, float)):
-        temperature = cfg.get("temperature", 0.7)
+    temp = preset.get("temperature")
+    if not isinstance(temp, (int, float)):
+        temp = cfg.get("temperature", 0.7)
+    temp = max(0.05, float(temp))
     max_tokens = preset.get("max_tokens")
     if not isinstance(max_tokens, int):
         max_tokens = cfg.get("max_new_tokens", 512)
@@ -143,7 +144,9 @@ def generate_structured(payload: Dict[str, Any]) -> Dict[str, Any]:
         "senior",
         prompt,
         max_new_tokens=max_tokens,
-        temperature=temperature,
+        temperature=temp,
+        top_p=0.92,
+        repetition_penalty=1.08,
         stop=["</json>"],
     )
     try:

@@ -95,7 +95,8 @@ def _jr_generate_transformers(
     stop: Optional[List[str]],
     max_new_tokens: Optional[int],
     temperature: Optional[float],
-    **_: Any,
+    do_sample: bool,
+    **extra: Any,
 ) -> str:
     """Generate junior outputs using transformers backend."""
 
@@ -126,12 +127,30 @@ def _jr_generate_transformers(
         else:
             raise ValueError("Tokenizer requires an EOS or PAD token for generation.")
 
+    top_p_value = extra.get("top_p")
+    if top_p_value is None:
+        top_p_value = cfg.get("top_p")
+    if top_p_value is None:
+        top_p_final = 0.9 if do_sample else 1.0
+    else:
+        top_p_final = float(top_p_value)
+
+    rep_penalty = extra.get("repeat_penalty")
+    if rep_penalty is None:
+        rep_penalty = extra.get("repetition_penalty")
+    if rep_penalty is None:
+        rep_penalty = cfg.get("repetition_penalty")
+    if rep_penalty is None:
+        rep_penalty = cfg.get("repeat_penalty")
+    if rep_penalty is None:
+        rep_penalty = 1.05
+
     sampling_kwargs: Dict[str, Any] = {
         "max_new_tokens": int(max_new_tokens if max_new_tokens is not None else cfg.get("max_new_tokens", 160)),
-        "do_sample": True,
+        "do_sample": do_sample,
         "temperature": float(temperature if temperature is not None else cfg.get("temperature", 0.2)),
-        "top_p": 0.9,
-        "repetition_penalty": 1.05,
+        "top_p": top_p_final,
+        "repetition_penalty": float(rep_penalty),
         "pad_token_id": eos_token_id,
         "eos_token_id": eos_token_id,
     }
@@ -226,6 +245,7 @@ def _generate_with_transformers(
     grammar: Optional[Any],
     repeat_penalty: Optional[float],
     top_p: Optional[float],
+    do_sample: bool,
 ) -> str:
     global _SEN_TOK, _SEN_MDL
 
@@ -252,18 +272,19 @@ def _generate_with_transformers(
     stops = list(stop or cfg.get("stop") or [])
     if role == "senior" and "</json>" not in stops:
         stops.append("</json>")
-    sampling_kwargs: Dict[str, Any] = {
-        "do_sample": True,
-        "temperature": float(temperature if temperature is not None else cfg.get("temperature", 0.7)),
-        "max_new_tokens": int(max_new_tokens if max_new_tokens is not None else cfg.get("max_new_tokens", 512)),
-    }
+    final_temperature = float(temperature if temperature is not None else cfg.get("temperature", 0.7))
     top_p_value = top_p if top_p is not None else cfg.get("top_p")
-    if top_p_value is not None:
-        sampling_kwargs["top_p"] = float(top_p_value)
+    repetition = repeat_penalty if repeat_penalty is not None else cfg.get("repetition_penalty", 1.05)
 
     gen = _SEN_MDL.generate(
         **inputs,
-        **sampling_kwargs,
+        max_new_tokens=int(max_new_tokens if max_new_tokens is not None else cfg.get("max_new_tokens", 512)),
+        do_sample=do_sample,
+        temperature=final_temperature,
+        top_p=float(top_p_value) if top_p_value is not None else (0.92 if do_sample else 1.0),
+        repetition_penalty=float(repetition),
+        pad_token_id=_SEN_TOK.eos_token_id,
+        eos_token_id=_SEN_TOK.eos_token_id,
     )
     text = _SEN_TOK.decode(gen[0], skip_special_tokens=True)
     trimmed = _apply_stops(text, stops)
@@ -282,6 +303,7 @@ def generate(
     grammar: Optional[Any] = None,
     repeat_penalty: Optional[float] = None,
     top_p: Optional[float] = None,
+    repetition_penalty: Optional[float] = None,
 ) -> str:
     """Generate a local LLM response for the requested role."""
 
@@ -291,8 +313,25 @@ def generate(
         else:
             temperature = max(0.0, min(0.2, float(temperature)))
 
+    if repetition_penalty is not None:
+        repeat_penalty = repetition_penalty
+
     cfg = _model_cfg(role)
     provider = cfg.get("provider", "")
+
+    default_temp = cfg.get("temperature")
+    if default_temp is None:
+        default_temp = 0.7 if role != "junior" else 0.2
+    effective_temp = temperature if temperature is not None else default_temp
+    try:
+        temp_value = float(effective_temp)
+    except (TypeError, ValueError):
+        temp_value = float(default_temp) if isinstance(default_temp, (int, float)) else 0.7
+    do_sample = True
+    if temp_value <= 0:
+        do_sample = False
+        temp_value = 1e-6
+    temperature = temp_value
 
     if role == "junior" and provider == "transformers":
         return _jr_generate_transformers(
@@ -301,6 +340,7 @@ def generate(
             stop,
             max_new_tokens,
             temperature,
+            do_sample,
             grammar=grammar,
             repeat_penalty=repeat_penalty,
             top_p=top_p,
@@ -329,5 +369,6 @@ def generate(
             grammar,
             repeat_penalty,
             top_p,
+            do_sample,
         )
     raise ValueError(f"Unsupported provider: {provider}")

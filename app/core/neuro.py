@@ -209,7 +209,7 @@ def bias_to_style() -> Dict[str, Union[int, float]]:
     positivity += 0.5 * endorphins
     alertness += 0.6 * histamine
 
-    temperature = max(0.1, min(1.3, temperature))
+    temperature = max(0.05, min(1.2, temperature))
     max_tokens = max(128.0, min(1024.0, max_tokens))
 
     return {
