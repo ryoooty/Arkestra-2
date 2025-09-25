@@ -13,7 +13,7 @@ from app.agents.senior import (
     refine_with_results as sr_refine,
 )
 from app.core.budget import trim as pack_budget
-from app.core.tokens import count_struct
+from app.core.tokens import count_struct, count_tokens
 from app.core.logs import log, span
 from app.core.bandit import pick as bandit_pick
 
@@ -103,6 +103,11 @@ def handle_user(
         if jr and "neuro_update" in jr and "levels" in jr["neuro_update"]:
             neuro.set_levels(jr["neuro_update"]["levels"])
         preset = neuro.bias_to_style()
+        preset_max_tokens = None
+        if isinstance(preset, dict):
+            preset_max_tokens = preset.get("max_tokens")
+        if not isinstance(preset_max_tokens, int) or preset_max_tokens <= 0:
+            preset_max_tokens = 512
 
     # 4) RAG
     with span("rag"):
@@ -116,8 +121,14 @@ def handle_user(
             history=hist_tail,
             rag_hits=rag_hits,
             junior_meta=jr,
-            max_tokens=preset.get("max_tokens", 512) if isinstance(preset, dict) else 512,
+            max_tokens=preset_max_tokens,
         )
+        hist_tokens = count_struct(packed["history"])
+        rag_tokens = sum(
+            count_tokens(hit.get("text", "")) for hit in packed["rag_hits"]
+        )
+        jr_tokens = count_tokens(str(packed["junior_meta"])) if packed["junior_meta"] else 0
+        total_tokens = hist_tokens + rag_tokens + jr_tokens
         sr_payload = {
             "history": packed["history"],
             "user_text": text,
@@ -128,11 +139,15 @@ def handle_user(
             "env_brief": env_brief,
         }
         log.info(
-            "budget: hist=%s (tokens=%s) rag=%s max_tokens=%s",
+            "budget: hist=%s rag=%s jr=%s tokens=(hist=%s, rag=%s, jr=%s, total=%s) max_tokens=%s",
             len(packed["history"]),
-            count_struct(packed["history"]),
             len(packed["rag_hits"]),
-            preset.get("max_tokens") if isinstance(preset, dict) else None,
+            bool(packed["junior_meta"]),
+            hist_tokens,
+            rag_tokens,
+            jr_tokens,
+            total_tokens,
+            preset_max_tokens,
         )
         tool_instr = get_tool_instructions(jr.get("tools_hint", [])) if jr else {}
         sr_payload["tool_instructions"] = tool_instr
