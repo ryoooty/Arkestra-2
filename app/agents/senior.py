@@ -9,6 +9,7 @@ senior.py — Mistral-7B. Роль: исполнитель и стилист.
 """
 
 from typing import Dict, Any
+from textwrap import dedent
 import json
 from jsonschema import validate, ValidationError
 from pathlib import Path
@@ -18,12 +19,26 @@ from app.core.llm import generate as llm_generate
 _SCHEMA = json.loads(Path("config/schemas/reply.schema.json").read_text(encoding="utf-8"))
 _CFG = yaml.safe_load(Path("config/llm.yaml").read_text(encoding="utf-8"))
 
-_SYS = """You are SENIOR for Arkestra (Mistral-7B).
-You must produce a compact JSON with keys: text, tool_calls (optional array of {name,args}), memory (optional), plan (optional).
-Use tool instructions exactly as given.
-User-facing text goes into "text". Do NOT include code fences.
-Keep helpful, follow style_directive, and constraints from preset and env_brief.
-If JUNIOR.tools_request contains names of missing tools, politely ask the user to add them in "text" and briefly explain why."""
+
+_SYS = dedent(
+    """
+    Вы — Arkestra Senior. Верните СТРОГО JSON по схеме reply.schema.json.
+
+    Контекст и требования:
+    - Вы SENIOR для Arkestra (Mistral-7B).
+    - Поля JSON: text, tool_calls (опциональный массив {name,args}), memory (опциональный массив), plan (опциональный массив).
+    - Пользовательский текст выводите в поле "text" без кодовых блоков.
+    - Следуйте style_directive, preset, env_brief и инструкциям инструментов.
+    - Если JUNIOR.tools_request содержит недостающие инструменты, в "text" вежливо попросите пользователя добавить их и кратко объясните зачем.
+
+    Пример:
+    <json>{"text":"ok","tool_calls":[],"memory":[],"plan":[]}</json>
+
+    Отвечай ТОЛЬКО валидным JSON строго по схеме.
+    Оберни JSON в теги <json> и </json>.
+    Без какого-либо текста до/после.
+    """
+)
 
 
 def _build_prompt(payload: Dict[str, Any]) -> str:
@@ -36,32 +51,27 @@ def _build_prompt(payload: Dict[str, Any]) -> str:
     env_brief = payload.get("env_brief", {})
     tool_instructions = payload.get("tool_instructions", {})
 
-    return (
-        f"{_SYS}\n"
-        f"ENV: {env_brief}\n"
-        f"PRESET: {preset}\n"
-        f"STYLE: {style_directive}\n"
-        f"TOOLS_INSTRUCTIONS: {tool_instructions}\n"
-        f"HISTORY: {history}\n"
-        f"RAG_HITS: {rag_hits}\n"
-        f"JUNIOR_JSON: {junior_json}\n"
-        f"USER: {user_text}\n"
-        f"Reply JSON with keys [text, tool_calls?, memory?, plan?]."
+    payload_serialized = json.dumps(
+        {
+            "env_brief": env_brief,
+            "preset": preset,
+            "style_directive": style_directive,
+            "tool_instructions": tool_instructions,
+            "history": history,
+            "rag_hits": rag_hits,
+            "junior_json": junior_json,
+            "user_text": user_text,
+        },
+        ensure_ascii=False,
     )
 
+    user = dedent(
+        f"""
+        {payload_serialized}
+        """
+    ).strip()
 
-def _resolve_stop_sequences() -> list[str]:
-    """Combine configured senior stop sequences with a default paragraph break."""
-
-    cfg_stop = _CFG.get("senior", {}).get("stop")
-    stops: list[str] = []
-    if isinstance(cfg_stop, (list, tuple)):
-        stops.extend([s for s in cfg_stop if s])
-    elif isinstance(cfg_stop, str) and cfg_stop:
-        stops.append(cfg_stop)
-    if "\n\n" not in stops:
-        stops.append("\n\n")
-    return stops
+    return f"{_SYS}\n\n{user}"
 
 
 def generate_structured(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -82,22 +92,29 @@ def generate_structured(payload: Dict[str, Any]) -> Dict[str, Any]:
     max_tokens = preset.get("max_tokens")
     if not isinstance(max_tokens, int):
         max_tokens = cfg.get("max_new_tokens", 512)
-    stop_sequences = _resolve_stop_sequences()
-
     raw = llm_generate(
         "senior",
         prompt,
         max_new_tokens=max_tokens,
         temperature=temperature,
-        stop=stop_sequences,
+        stop=["</json>"],
     )
+    raw = raw.strip()
+    if "</json>" not in raw:
+        raw = f"{raw}</json>"
+    start_tag, end_tag = "<json>", "</json>"
+    start_idx = raw.find(start_tag)
+    end_idx = raw.find(end_tag, start_idx + len(start_tag))
+    if start_idx == -1 or end_idx == -1 or end_idx <= start_idx:
+        raise RuntimeError(f"Senior returned response without <json> wrapper: {raw}")
+    json_payload = raw[start_idx + len(start_tag):end_idx].strip()
     # Extract JSON
     try:
-        data = json.loads(raw)
+        data = json.loads(json_payload)
     except Exception:
-        start = raw.find("{"); end = raw.rfind("}")
+        start = json_payload.find("{"); end = json_payload.rfind("}")
         if start >= 0 and end >= 0 and end > start:
-            data = json.loads(raw[start:end+1])
+            data = json.loads(json_payload[start:end+1])
         else:
             raise RuntimeError(f"Senior returned non-JSON: {raw}")
     try:
