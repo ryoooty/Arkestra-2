@@ -3,7 +3,8 @@ junior:
   model_path: ".\\models\\gemma3n-e4b\\google_gemma-3n-E4B-it-Q4_K_M.gguf"
   temperature: 0.2
   max_new_tokens: 64
-  stop: ["\n\n","```"]
+  stop: ["\n\n","
+"]
 senior:
   provider: "transformers"
   model_id: "mistralai/Mistral-7B-Instruct-v0.3"
