@@ -3,3 +3,5 @@ max_tools_in_prompt: 8
 policy:
   allow_parallel_calls: false
   second_pass_with_results: true
+features:
+  telegram_enabled: false
