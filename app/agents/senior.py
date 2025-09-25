@@ -10,10 +10,12 @@ senior.py — Mistral-7B. Роль: исполнитель и стилист.
 
 from typing import Dict, Any
 from textwrap import dedent
+import re
 import json
 from jsonschema import validate, ValidationError
 from pathlib import Path
 import yaml
+from json_repair import repair_json
 from app.core.llm import generate as llm_generate
 
 _SCHEMA = json.loads(Path("config/schemas/reply.schema.json").read_text(encoding="utf-8"))
@@ -74,6 +76,36 @@ def _build_prompt(payload: Dict[str, Any]) -> str:
     return f"{_SYS}\n\n{user}"
 
 
+def _extract_json_block(raw: str) -> str | None:
+    # 1) <json>...</json>
+    m = re.search(r"<json>(.+?)</json>", raw, flags=re.S | re.I)
+    if m:
+        return m.group(1).strip()
+    # 2)
+    m = re.search(r"```json\s*(.+?)```", raw, flags=re.S | re.I)
+    if m:
+        return m.group(1).strip()
+    # 3) Самые внешние { ... }
+    start = raw.find("{")
+    end = raw.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        return raw[start : end + 1].strip()
+    return None
+
+
+def _parse_reply(raw: str) -> dict:
+    block = _extract_json_block(raw)
+    if not block:
+        raise ValueError("No JSON block found in model output")
+    # Сначала строгий json
+    try:
+        return json.loads(block)
+    except Exception:
+        # Попробовать поправить мелкие косяки (одинарные кавычки, запятые и т.п.)
+        fixed = repair_json(block)
+        return json.loads(fixed)
+
+
 def generate_structured(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Generate a structured reply for the senior agent.
 
@@ -99,24 +131,28 @@ def generate_structured(payload: Dict[str, Any]) -> Dict[str, Any]:
         temperature=temperature,
         stop=["</json>"],
     )
-    raw = raw.strip()
-    if "</json>" not in raw:
-        raw = f"{raw}</json>"
-    start_tag, end_tag = "<json>", "</json>"
-    start_idx = raw.find(start_tag)
-    end_idx = raw.find(end_tag, start_idx + len(start_tag))
-    if start_idx == -1 or end_idx == -1 or end_idx <= start_idx:
-        raise RuntimeError(f"Senior returned response without <json> wrapper: {raw}")
-    json_payload = raw[start_idx + len(start_tag):end_idx].strip()
-    # Extract JSON
     try:
-        data = json.loads(json_payload)
+        data = _parse_reply(raw)
     except Exception:
-        start = json_payload.find("{"); end = json_payload.rfind("}")
-        if start >= 0 and end >= 0 and end > start:
-            data = json.loads(json_payload[start:end+1])
-        else:
-            raise RuntimeError(f"Senior returned non-JSON: {raw}")
+        repair_prompt = dedent(
+            f"""
+            Предыдущий ответ невалидный. Верни ТОЛЬКО валидный JSON, по тем же правилам, между <json> и </json>.
+            Без любого дополнительного текста. Исправь ошибки формата.
+
+            ОРИГИНАЛ:
+            {raw[-2000:]}
+            """
+        )
+        raw2 = llm_generate(
+            "senior",
+            repair_prompt,
+            max_new_tokens=256,
+            temperature=0.0,
+            stop=["</json>"],
+        )
+        if not raw2.strip().endswith("</json>"):
+            raw2 = raw2.strip() + "</json>"
+        data = _parse_reply(raw2)
     try:
         validate(instance=data, schema=_SCHEMA)
     except ValidationError:
