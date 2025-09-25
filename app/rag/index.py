@@ -1,8 +1,10 @@
 """Simple FAISS-backed index with metadata (fallback to in-memory list)."""
 
-from typing import List, Dict, Any
+from __future__ import annotations
+
 import json
 from pathlib import Path
+from typing import Any, Dict, List, Sequence
 
 try:
     import numpy as np
@@ -17,75 +19,119 @@ except Exception:
 
 from app.rag.encoders import encode
 
-DATA_DIR = Path("rag_store")
-DATA_DIR.mkdir(exist_ok=True)
-META_PATH = DATA_DIR / "meta.jsonl"
-INDEX_PATH = DATA_DIR / "index.faiss"
+DATA_DIR = Path("data") / "rag"
+INDEX_PATH = DATA_DIR / "faiss.index"
+ROWS_PATH = DATA_DIR / "rows.jsonl"
+INFO_PATH = DATA_DIR / "meta.json"
 
 _mem: List[Dict[str, Any]] = []  # fallback corpus
 _index = None
 
 
-def _ensure_index(d: int):
-    """Create or reload IndexFlatIP with the required dimensionality."""
+def _ensure_data_dir() -> None:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _load_index_from_disk():
+    if not HAVE_FAISS or not INDEX_PATH.exists():
+        return None
+    try:
+        return faiss.read_index(str(INDEX_PATH))
+    except Exception:
+        try:
+            INDEX_PATH.unlink()
+        except FileNotFoundError:  # pragma: no cover - filesystem race
+            pass
+        return None
+
+
+def _write_rows(rows: Sequence[Dict[str, Any]]) -> None:
+    if not rows:
+        return
+    _ensure_data_dir()
+    with ROWS_PATH.open("a", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+def _write_meta(dim: int, encoder: str) -> None:
+    _ensure_data_dir()
+    INFO_PATH.write_text(
+        json.dumps({"dim": int(dim), "encoder": encoder}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+
+def reset_index() -> None:
+    """Remove on-disk FAISS index and metadata."""
 
     global _index
 
-    if _index is not None and getattr(_index, "d", None) == d:
-        return
-
-    if INDEX_PATH.exists():
+    _index = None
+    for path in (INDEX_PATH, INFO_PATH):
         try:
-            on_disk = faiss.read_index(str(INDEX_PATH))
-            if on_disk.d == d:
-                _index = on_disk
-                return
-            INDEX_PATH.unlink()
-        except Exception:
-            INDEX_PATH.unlink()
-
-    _index = faiss.IndexFlatIP(d)
+            path.unlink()
+        except FileNotFoundError:
+            continue
 
 
-def add_texts(rows: List[Dict[str, Any]]):
-    """
-    rows: [{"id": "...", "text":"...", "meta": {...}}]
-    """
+def add_texts(X: np.ndarray, encoder_name: str | None = None) -> None:
+    """Persist embeddings into the FAISS index, recreating when dims change."""
 
-    global _mem
+    global _index, _mem
 
-    if not rows:
-        return
+    encoder_value = encoder_name or "unknown"
 
-    _mem.extend(rows)
+    rows: Sequence[Dict[str, Any]] | None = None
 
-    if not HAVE_FAISS:
-        return
-
-    if np is None:
-        raise RuntimeError("NumPy is required for FAISS indexing but is not available")
-
-    vecs = encode([r["text"] for r in rows])
-    X = np.ascontiguousarray(np.asarray(vecs, dtype="float32"))
+    if isinstance(X, list) and X and isinstance(X[0], dict):
+        rows = X  # type: ignore[assignment]
+        _mem.extend(rows)
+        if not HAVE_FAISS:
+            _write_rows(rows)
+            return
+        if np is None:
+            raise RuntimeError(
+                "NumPy is required for FAISS indexing but is not available"
+            )
+        vecs = encode([r["text"] for r in rows])
+        X = np.asarray(vecs, dtype=np.float32)
+    else:
+        if np is None:
+            raise RuntimeError(
+                "NumPy is required for FAISS indexing but is not available"
+            )
+        X = np.asarray(X, dtype=np.float32)
 
     if X.ndim != 2:
         raise ValueError("Expected embeddings with shape (n, d)")
 
-    d = X.shape[1]
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    _ensure_index(d)
+    X = np.ascontiguousarray(X)
 
-    if getattr(_index, "d", None) != d:
-        if INDEX_PATH.exists():
-            INDEX_PATH.unlink()
-        _ensure_index(d)
+    if not HAVE_FAISS:
+        return
 
-    _index.add(X)
-    faiss.write_index(_index, str(INDEX_PATH))
+    _ensure_data_dir()
 
-    with open(META_PATH, "a", encoding="utf-8") as f:
-        for r in rows:
-            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+    index = _index or _load_index_from_disk()
+
+    dim = X.shape[1]
+
+    if index is not None and getattr(index, "d", None) != dim:
+        reset_index()
+        index = None
+
+    if index is None:
+        index = faiss.IndexFlatIP(dim)
+
+    index.add(X)
+    faiss.write_index(index, str(INDEX_PATH))
+    _write_meta(dim, encoder_value)
+
+    if rows:
+        _write_rows(rows)
+
+    _index = index
 
 def search(query: str, k: int = 6) -> List[Dict[str, Any]]:
     if not HAVE_FAISS:
@@ -97,7 +143,8 @@ def search(query: str, k: int = 6) -> List[Dict[str, Any]]:
             if s>0: scored.append({"id":r["id"], "text": r["text"], "score": float(s), "meta": r.get("meta",{})})
         return sorted(scored, key=lambda x: x["score"], reverse=True)[:k]
     # FAISS search
-    if not INDEX_PATH.exists() or not META_PATH.exists(): return []
+    if not INDEX_PATH.exists() or not ROWS_PATH.exists():
+        return []
     index = faiss.read_index(str(INDEX_PATH))
     if np is None:
         raise RuntimeError("NumPy is required for FAISS indexing but is not available")
@@ -106,7 +153,7 @@ def search(query: str, k: int = 6) -> List[Dict[str, Any]]:
     Q = np.ascontiguousarray(np.asarray(qv, dtype="float32"))
     D, I = index.search(Q, k)
     # read meta
-    meta_rows = [json.loads(line) for line in META_PATH.read_text(encoding="utf-8").splitlines()]
+    meta_rows = [json.loads(line) for line in ROWS_PATH.read_text(encoding="utf-8").splitlines()]
     out = []
     for dist, idx in zip(D[0], I[0]):
         if idx<0 or idx>=len(meta_rows): continue
