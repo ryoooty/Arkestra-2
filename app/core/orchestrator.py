@@ -89,7 +89,8 @@ def handle_user(
 
     bandit_intent = "task"
     bandit_chosen_kind: str | None = None
-    tools_req = jr.get("tools_request", []) if jr else []
+    raw_tools_req = jr.get("tools_request") if jr else None
+    tools_req = [r for r in raw_tools_req if isinstance(r, dict)] if isinstance(raw_tools_req, list) else []
     if jr:
         bandit_intent = jr.get("intent") or bandit_intent
         suggestions = jr.get("suggestions")
@@ -177,7 +178,19 @@ def handle_user(
             total_tokens,
             preset_max_tokens,
         )
-        tool_instr = get_tool_instructions(jr.get("tools_hint", [])) if jr else {}
+
+        def _normalise_tool_hints(value: Any) -> list[str]:
+            if isinstance(value, str):
+                return [value]
+            if isinstance(value, list):
+                return [str(v) for v in value if isinstance(v, str)]
+            return []
+
+        tool_instr = (
+            get_tool_instructions(_normalise_tool_hints(jr.get("tools_hint")))
+            if jr
+            else {}
+        )
         sr_payload["tool_instructions"] = tool_instr
         reply = sr_generate(sr_payload)
 
