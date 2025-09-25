@@ -9,10 +9,13 @@ senior.py — Mistral-7B. Роль: исполнитель и стилист.
 """
 
 from typing import Dict, Any
+import re
 import json
 from jsonschema import validate, ValidationError
 from pathlib import Path
 import yaml
+from textwrap import dedent
+from json_repair import repair_json
 from app.core.llm import generate as llm_generate
 
 _SCHEMA = json.loads(Path("config/schemas/reply.schema.json").read_text(encoding="utf-8"))
@@ -24,6 +27,36 @@ Use tool instructions exactly as given.
 User-facing text goes into "text". Do NOT include code fences.
 Keep helpful, follow style_directive, and constraints from preset and env_brief.
 If JUNIOR.tools_request contains names of missing tools, politely ask the user to add them in "text" and briefly explain why."""
+
+
+def _extract_json_block(raw: str) -> str | None:
+    # 1) <json>...</json>
+    m = re.search(r"<json>(.+?)</json>", raw, flags=re.S | re.I)
+    if m:
+        return m.group(1).strip()
+    # 2)
+    m = re.search(r"\njson\s*(.+?)`", raw, flags=re.S | re.I)
+    if m:
+        return m.group(1).strip()
+    # 3) Самые внешние { ... }
+    start = raw.find("{")
+    end = raw.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        return raw[start : end + 1].strip()
+    return None
+
+
+def _parse_reply(raw: str) -> dict:
+    block = _extract_json_block(raw)
+    if not block:
+        raise ValueError("No JSON block found in model output")
+    # Сначала строгий json
+    try:
+        return json.loads(block)
+    except Exception:
+        # Попробовать поправить мелкие косяки (одинарные кавычки, запятые и т.п.)
+        fixed = repair_json(block)
+        return json.loads(fixed)
 
 
 def _build_prompt(payload: Dict[str, Any]) -> str:
@@ -91,15 +124,29 @@ def generate_structured(payload: Dict[str, Any]) -> Dict[str, Any]:
         temperature=temperature,
         stop=stop_sequences,
     )
-    # Extract JSON
     try:
-        data = json.loads(raw)
+        data = _parse_reply(raw)
     except Exception:
-        start = raw.find("{"); end = raw.rfind("}")
-        if start >= 0 and end >= 0 and end > start:
-            data = json.loads(raw[start:end+1])
-        else:
-            raise RuntimeError(f"Senior returned non-JSON: {raw}")
+        repair_prompt = dedent(
+            f"""
+            Предыдущий ответ невалидный. Верни ТОЛЬКО валидный JSON, по тем же правилам, между <json> и </json>.
+            Без любого дополнительного текста. Исправь ошибки формата.
+
+            ОРИГИНАЛ:
+            {raw[-2000:]}
+            """
+        )
+        raw2 = llm_generate(
+            "senior",
+            repair_prompt,
+            max_new_tokens=256,
+            temperature=0.0,
+            stop=["</json>"],
+        )
+        # на случай, если стоп сработал и срезал закрывающий тег:
+        if not raw2.strip().endswith("</json>"):
+            raw2 = raw2.strip() + "</json>"
+        data = _parse_reply(raw2)
     try:
         validate(instance=data, schema=_SCHEMA)
     except ValidationError:
