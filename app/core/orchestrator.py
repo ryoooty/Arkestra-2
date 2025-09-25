@@ -1,4 +1,5 @@
 from typing import Dict, Any, List
+from pathlib import Path
 
 from app.memory.db import insert_message, get_last_messages, set_message_meta
 from app.memory.db import get_tool_instructions
@@ -16,6 +17,25 @@ from app.core.budget import trim as pack_budget
 from app.core.tokens import count_struct, count_tokens
 from app.core.logs import log, span
 from app.core.bandit import pick as bandit_pick
+
+try:  # pragma: no cover - optional dependency
+    import yaml  # type: ignore
+except ModuleNotFoundError:  # pragma: no cover - fallback
+    yaml = None
+    from app.util import simple_yaml
+
+    def _load_yaml(path: Path) -> Dict[str, Any]:
+        return simple_yaml.loads(path.read_text(encoding="utf-8"))
+else:
+
+    def _load_yaml(path: Path) -> Dict[str, Any]:
+        return yaml.safe_load(path.read_text(encoding="utf-8"))
+
+
+_LLM_CFG = _load_yaml(Path("config/llm.yaml"))
+_SENIOR_MAX_NEW_TOKENS = _LLM_CFG.get("senior", {}).get("max_new_tokens", 512)
+if not isinstance(_SENIOR_MAX_NEW_TOKENS, int) or _SENIOR_MAX_NEW_TOKENS <= 0:
+    _SENIOR_MAX_NEW_TOKENS = 512
 
 
 def handle_user(
@@ -107,7 +127,7 @@ def handle_user(
         if isinstance(preset, dict):
             preset_max_tokens = preset.get("max_tokens")
         if not isinstance(preset_max_tokens, int) or preset_max_tokens <= 0:
-            preset_max_tokens = 512
+            preset_max_tokens = _SENIOR_MAX_NEW_TOKENS
 
     # 4) RAG
     with span("rag"):
