@@ -6,12 +6,16 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Sequence, TYPE_CHECKING
 
 import torch
+import os
 import yaml
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
 if TYPE_CHECKING:  # pragma: no cover - import is heavy but useful for typing
     from llama_cpp import Llama
 
+
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
 
 _CFG: Optional[Dict[str, Any]] = None
 _LLAMA_JUNIOR: Optional["Llama"] = None
