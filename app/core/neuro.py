@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, Iterable, Tuple, Union
+from typing import Any, Dict, Iterable, Tuple, Union
 
 
 try:  # pragma: no cover - optional dependency
@@ -41,6 +41,7 @@ _NEUROTRANSMITTERS = (
 _BASELINE: Dict[str, int] = {}
 _LEVELS: Dict[str, int] = {}
 _STYLE_BASELINE: Dict[str, float] = {}
+_PERSONA_META: Dict[str, Any] = {}
 _PERSONA_LOADED = False
 
 
@@ -53,13 +54,14 @@ def _clamp_level(value: Union[int, float]) -> int:
 def _ensure_persona_loaded() -> None:
     """Load persona configuration and initialise baselines exactly once."""
 
-    global _PERSONA_LOADED, _BASELINE, _LEVELS, _STYLE_BASELINE
+    global _PERSONA_LOADED, _BASELINE, _LEVELS, _STYLE_BASELINE, _PERSONA_META
     if _PERSONA_LOADED:
         return
 
     data = _load_yaml(Path("config/persona.yaml")) or {}
     raw_baseline = data.get("baseline_levels", {}) if isinstance(data, dict) else {}
     raw_bias_map = data.get("bias_map", {}) if isinstance(data, dict) else {}
+    raw_persona = data.get("persona", {}) if isinstance(data, dict) else {}
 
     baseline_items: Iterable[Tuple[str, int]]
     if isinstance(raw_baseline, dict):
@@ -98,6 +100,10 @@ def _ensure_persona_loaded() -> None:
             "warmth": 0.0,
             "alertness": 0.0,
         }
+    if isinstance(raw_persona, dict):
+        _PERSONA_META = dict(raw_persona)
+    else:
+        _PERSONA_META = {}
     _PERSONA_LOADED = True
 
 
@@ -216,6 +222,24 @@ def bias_to_style() -> Dict[str, Union[int, float]]:
         "warmth_bias": _clamp_float(warmth),
         "positivity_bias": _clamp_float(positivity),
         "alertness_bias": _clamp_float(alertness),
+    }
+
+
+def persona_brief() -> Dict[str, Any]:
+    """Return a lightweight summary of the persona configuration."""
+
+    _ensure_persona_loaded()
+    name = str(_PERSONA_META.get("name") or "Arkestra")
+    description = str(
+        _PERSONA_META.get(
+            "description",
+            "Тёплый русскоязычный ИИ-компаньон, который поддерживает и помогает собеседнику.",
+        )
+    )
+    return {
+        "name": name,
+        "description": description,
+        "style_bias": dict(_STYLE_BASELINE),
     }
 
 

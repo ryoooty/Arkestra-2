@@ -17,6 +17,7 @@ from pathlib import Path
 import yaml
 from json_repair import repair_json
 from app.core.llm import generate as llm_generate
+from app.core.logs import log
 
 _SCHEMA = json.loads(Path("config/schemas/reply.schema.json").read_text(encoding="utf-8"))
 _CFG = yaml.safe_load(Path("config/llm.yaml").read_text(encoding="utf-8"))
@@ -24,56 +25,69 @@ _CFG = yaml.safe_load(Path("config/llm.yaml").read_text(encoding="utf-8"))
 
 _SYS = dedent(
     """
-    Вы — Arkestra Senior. Верните СТРОГО JSON по схеме reply.schema.json.
-
-    Контекст и требования:
-    - Вы SENIOR для Arkestra (Mistral-7B).
-    - Поля JSON: text, tool_calls (опциональный массив {name,args}), memory (опциональный массив), plan (опциональный массив).
-    - Пользовательский текст выводите в поле "text" без кодовых блоков.
-    - Следуйте style_directive, preset, env_brief и инструкциям инструментов.
-    - Если JUNIOR.tools_request содержит недостающие инструменты, в "text" вежливо попросите пользователя добавить их и кратко объясните зачем.
-
-    Пример:
-    <json>{"text":"ok","tool_calls":[],"memory":[],"plan":[]}</json>
-
-    Отвечай ТОЛЬКО валидным JSON строго по схеме.
-    Оберни JSON в теги <json> и </json>.
-    Без какого-либо текста до/после.
+    Вы — Arkestra Senior, тёплый и внимательный русскоязычный ассистент.
+    Верни СТРОГО валидный JSON по схеме reply.schema.json.
+    Требования:
+    1. Единственное, что ты выводишь — JSON между тегами <json> и </json>.
+    2. Поля: text (строка, без Markdown-кодовых блоков), опциональные tool_calls[], memory[], plan[].
+    3. Соблюдай предоставленные persona, env_brief, style_hint, style_directive и инструкцию инструментов.
+    4. Если инструментов не хватает, попроси пользователя добавить их, объясни зачем.
     """
 )
 
 
-def _build_prompt(payload: Dict[str, Any]) -> str:
-    history = payload.get("history", [])
-    user_text = payload.get("user_text", "")
-    rag_hits = payload.get("rag_hits", [])
-    junior_json = payload.get("junior_json", {})
-    preset = payload.get("preset", {})
-    style_directive = payload.get("style_directive", "")
-    env_brief = payload.get("env_brief", {})
-    tool_instructions = payload.get("tool_instructions", {})
+def _format_json(data: Any) -> str:
+    return json.dumps(data, ensure_ascii=False, indent=2)
 
-    payload_serialized = json.dumps(
-        {
-            "env_brief": env_brief,
-            "preset": preset,
-            "style_directive": style_directive,
-            "tool_instructions": tool_instructions,
-            "history": history,
-            "rag_hits": rag_hits,
-            "junior_json": junior_json,
-            "user_text": user_text,
-        },
-        ensure_ascii=False,
-    )
 
-    user = dedent(
+def _context_block(payload: Dict[str, Any]) -> str:
+    history = payload.get("history") or []
+    persona = payload.get("persona") or {}
+    env_brief = payload.get("env_brief") or {}
+    style_hint = payload.get("style_hint") or {}
+    style_directive = payload.get("style_directive") or ""
+    junior_json = payload.get("junior_json") or {}
+    jr_suggestions = payload.get("jr_suggestions") or []
+    rag_hits = payload.get("rag_hits") or []
+    tool_instructions = payload.get("tool_instructions") or {}
+
+    sections = [
+        "CONTEXT:",
+        "History (latest last):\n" + _format_json(history),
+        "Persona:\n" + _format_json(persona),
+        "Environment:\n" + _format_json(env_brief),
+        "Style hint:\n" + _format_json(style_hint),
+        f"Style directive:\n{style_directive or '—'}",
+        "Junior suggestions (top-3):\n" + _format_json(jr_suggestions),
+        "Junior meta:\n" + _format_json(junior_json),
+        "Tool instructions:\n" + _format_json(tool_instructions),
+        "RAG hits:\n" + _format_json(rag_hits),
+    ]
+    return "\n\n".join(sections)
+
+
+def _task_block(payload: Dict[str, Any]) -> str:
+    last_user_text = payload.get("last_user_text") or payload.get("user_text") or ""
+    last_user_json = json.dumps(last_user_text, ensure_ascii=False)
+    requirements = dedent(
         f"""
-        {payload_serialized}
+        TASK:
+        1. Ответь тепло и поддерживающе на последний пользовательский ввод (см. last_user_text).
+        2. Минимум 40 слов в ответе.
+        3. Заверши ответ одним коротким встречным вопросом.
+        4. Используй русский язык.
+
+        last_user_text: {last_user_json}
         """
     ).strip()
+    return requirements
 
-    return f"{_SYS}\n\n{user}"
+
+def _build_prompt(payload: Dict[str, Any]) -> str:
+    context = _context_block(payload)
+    task = _task_block(payload)
+    output_rules = "OUTPUT: Верни только <json>{...}</json> по заданной схеме."
+    return "\n\n".join([_SYS.strip(), context, task, output_rules])
 
 
 def _extract_json_block(raw: str) -> str | None:
@@ -116,6 +130,7 @@ def generate_structured(payload: Dict[str, Any]) -> Dict[str, Any]:
     """
 
     prompt = _build_prompt(payload)
+    log.info("senior prompt preview: %s", prompt[:600].replace("\n", "\\n"))
     cfg = _CFG.get("senior", {})
     preset = payload.get("preset") or {}
     temperature = preset.get("temperature")
@@ -158,6 +173,7 @@ def generate_structured(payload: Dict[str, Any]) -> Dict[str, Any]:
     except ValidationError:
         # minimal recovery to keep service alive
         data = {"text": data["text"]} if isinstance(data, dict) and "text" in data else {"text": "Извини, у меня сбой формата ответа."}
+    data = _maybe_refine_smalltalk(payload, data, max_tokens)
     # light sanity
     if "text" not in data:
         raise RuntimeError("Senior reply lacks 'text'")
@@ -165,6 +181,59 @@ def generate_structured(payload: Dict[str, Any]) -> Dict[str, Any]:
     if "tool_calls" in data and not isinstance(data["tool_calls"], list):
         data["tool_calls"] = []
     return data
+
+
+def _maybe_refine_smalltalk(
+    payload: Dict[str, Any],
+    data: Dict[str, Any],
+    max_tokens: int,
+) -> Dict[str, Any]:
+    jr_intent = str((payload.get("junior_json") or {}).get("intent") or "").lower()
+    text = str(data.get("text", ""))
+    if jr_intent != "smalltalk" or len(text.split()) >= 20:
+        return data
+
+    draft_json = json.dumps({"text": text}, ensure_ascii=False)
+    context = _context_block(payload)
+    task = dedent(
+        """
+        TASK UPDATE:
+        Ответ получился слишком коротким. Перепиши JSON так, чтобы:
+        - поле "text" содержало минимум 45 слов;
+        - тон остался тёплым и поддерживающим;
+        - в конце оставался один короткий встречный вопрос.
+        Верни только JSON между тегами <json> и </json>.
+        """
+    ).strip()
+    refine_prompt = "\n\n".join(
+        [
+            _SYS.strip(),
+            context,
+            f"DRAFT:\n<json>{draft_json}</json>",
+            task,
+        ]
+    )
+    raw = llm_generate(
+        "senior",
+        refine_prompt,
+        max_new_tokens=max_tokens,
+        temperature=0.65,
+        top_p=0.9,
+        stop=["</json>"],
+    )
+    try:
+        refined = _parse_reply(raw)
+        validate(instance=refined, schema=_SCHEMA)
+    except Exception:
+        refined = data
+
+    refined_text = str(refined.get("text", ""))
+    if len(refined_text.split()) < 20:
+        refined["text"] = (
+            "Привет! Я рядом и с удовольствием поддержу тебя."
+            " Расскажи, что сейчас происходит и какое настроение у тебя сегодня?"
+        )
+    return refined
 
 
 def refine_with_results(payload: Dict[str, Any]) -> Dict[str, Any]:

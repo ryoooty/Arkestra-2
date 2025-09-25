@@ -3,7 +3,7 @@ from pathlib import Path
 
 from app.memory.db import insert_message, get_last_messages, set_message_meta
 from app.memory.db import get_tool_instructions
-from app.core.env_state import ensure_env_session
+from app.core.env_state import ensure_env_session, build_env_brief
 from app.core import neuro
 from app.core.router import search as rag_search
 from app.core.tools_runner import run_all
@@ -37,6 +37,8 @@ _SENIOR_MAX_NEW_TOKENS = _LLM_CFG.get("senior", {}).get("max_new_tokens", 512)
 if not isinstance(_SENIOR_MAX_NEW_TOKENS, int) or _SENIOR_MAX_NEW_TOKENS <= 0:
     _SENIOR_MAX_NEW_TOKENS = 512
 
+_HISTORY_WINDOW = 16
+
 
 def handle_user(
     user_id: str,
@@ -50,15 +52,13 @@ def handle_user(
 
     # 1) env
     with span("env"):
-        ensure_env_session(channel, chat_id, participants)
-        env_brief = {
-            "channel": channel,
-            "chat_id": chat_id,
-            "participants": participants,
-        }
+        env_id = ensure_env_session(channel, chat_id, participants)
+        env_brief = build_env_brief(env_id, channel, chat_id)
+        env_brief.setdefault("participants", participants)
+        env_brief.setdefault("language", "ru")
 
     # fetch history tail
-    hist_tail = get_last_messages(user_id, n=6)
+    hist_tail = get_last_messages(user_id, n=_HISTORY_WINDOW)
 
     # 2) junior
     with span("junior"):
@@ -85,6 +85,16 @@ def handle_user(
                 "tools_hint": [],
                 "style_directive": "дружелюбно и коротко",
                 "neuro_update": {"levels": neuro.snapshot()},
+                "suggestions": [
+                    {
+                        "kind": "good",
+                        "text": "Привет! Я рядом и с удовольствием помогу. Расскажи, что сейчас занимает твои мысли, и чем я могу поддержать тебя?",
+                    },
+                    {
+                        "kind": "mischief",
+                        "text": "Эй, давай сделаем сегодня что-то необычное и весёлое! О чём мечтаешь прямо сейчас, может, устроим маленькое приключение?",
+                    },
+                ],
             }
 
     bandit_intent = "task"
@@ -125,6 +135,18 @@ def handle_user(
             neuro.set_levels(jr["neuro_update"]["levels"])
         raw_preset = neuro.bias_to_style()
         preset = dict(raw_preset) if isinstance(raw_preset, dict) else {}
+        style_hint = {
+            k: preset.get(k)
+            for k in (
+                "humor_bias",
+                "structure_bias",
+                "ask_clarify_bias",
+                "brevity_bias",
+                "warmth_bias",
+                "positivity_bias",
+                "alertness_bias",
+            )
+        }
 
         # Normalise generation overrides so that downstream callers always
         # receive sane values even if neuro returns junk or partial presets.
@@ -158,14 +180,48 @@ def handle_user(
         )
         jr_tokens = count_tokens(str(packed["junior_meta"])) if packed["junior_meta"] else 0
         total_tokens = hist_tokens + rag_tokens + jr_tokens
+        persona = neuro.persona_brief()
+        suggestions = jr.get("suggestions") if isinstance(jr, dict) else None
+        if isinstance(suggestions, list):
+            limited_suggestions = []
+            for candidate in suggestions:
+                if not isinstance(candidate, dict):
+                    continue
+                text_value = str(candidate.get("text", "")).strip()
+                if not text_value:
+                    text_value = (
+                        "Привет! Я здесь, чтобы поддержать тебя и помочь разобраться."
+                        " Расскажи, что сейчас важно, и чем мне заняться в первую очередь?"
+                    )
+                elif len(text_value.split()) < 12:
+                    text_value = (
+                        text_value
+                        + " Я рядом и готова поддержать. Что сейчас кажется самым важным?"
+                    )
+                limited_suggestions.append(
+                    {
+                        "kind": candidate.get("kind", "good"),
+                        "text": text_value,
+                    }
+                )
+                if len(limited_suggestions) >= 3:
+                    break
+        else:
+            limited_suggestions = []
+
         sr_payload = {
             "history": packed["history"],
+            "history_tail": hist_tail,
             "user_text": text,
+            "last_user_text": text,
             "rag_hits": packed["rag_hits"],
             "junior_json": packed["junior_meta"],
+            "jr_suggestions": limited_suggestions,
             "preset": preset,
             "style_directive": jr.get("style_directive", "") if jr else "",
+            "style_hint": style_hint,
             "env_brief": env_brief,
+            "persona": persona,
         }
         log.info(
             "budget: hist=%s rag=%s jr=%s tokens=(hist=%s, rag=%s, jr=%s, total=%s) max_tokens=%s",
