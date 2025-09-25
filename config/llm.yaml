@@ -4,7 +4,8 @@ junior:
   temperature: 0.2
   endpoint: "https://api.your-llm-provider.example/v1/chat/completions"
 senior:
-  model_id: "mistral-7b"
+  provider: "transformers"
+  model_id: "mistralai/Mistral-7B-Instruct-v0.3"
   temperature: 0.7
   max_new_tokens: 512
-  endpoint: "https://api.your-llm-provider.example/v1/chat/completions"
+  stop: ["\n\n"]
