@@ -77,7 +77,10 @@ def _generate_with_llama_cpp(
             verbose=False,
         )
 
-    stops = list(stop or cfg.get("stop") or [])
+    if role == "junior":
+        stops = list(stop or [])
+    else:
+        stops = list(stop or cfg.get("stop") or [])
     if role in {"junior", "senior"} and "</json>" not in stops:
         stops.append("</json>")
 
