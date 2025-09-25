@@ -169,6 +169,10 @@ def generate(payload: Dict[str, Any], **kwargs) -> Dict[str, Any]:
 
     nu = data.get("neuro_update") or {}
     lv = nu.get("levels") or {}
+    if not isinstance(lv, dict):
+        # Неправильный формат от модели. Сбрасываем в пустой словарь,
+        # чтобы последующая нормализация не падала.
+        lv = {}
     for k in ("dopamine", "serotonin", "norepinephrine", "acetylcholine"):
         lv.setdefault(k, 0)
     nu["levels"] = lv
