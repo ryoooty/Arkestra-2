@@ -17,11 +17,6 @@ from textwrap import dedent
 from pathlib import Path
 from jsonschema import validate, ValidationError
 
-try:  # pragma: no cover - optional dependency for runtime GPU inference
-    from llama_cpp import LlamaGrammar
-except ModuleNotFoundError:  # pragma: no cover
-    LlamaGrammar = None  # type: ignore
-
 from app.core.llm import generate as llm_generate
 
 JR_JSON_SCHEMA = {
@@ -74,10 +69,6 @@ STRICT_JSON_JR = dedent(
 No markdown, no code fences, no extra text. Output must be inside <json>...</json>."""
 )
 
-JR_GRAMMAR = (
-    LlamaGrammar.from_json_schema(json.dumps(JR_JSON_SCHEMA)) if LlamaGrammar else None
-)
-
 
 def _extract_json(raw: str) -> str | None:
     if not raw:
@@ -127,34 +118,35 @@ def generate(payload: Dict[str, Any], **kwargs) -> Dict[str, Any]:
         max_new_tokens = max(160, requested_tokens)
     else:
         max_new_tokens = 160
-    stop_sequences = kwargs.get("stop")
-    if stop_sequences is None:
-        stop_sequences = ["</json>"]
-    raw = llm_generate(
-        "junior",
-        prompt,
-        max_new_tokens=max_new_tokens,
-        temperature=kwargs.get("temperature", 0.2),
-        stop=stop_sequences,
-        grammar=JR_GRAMMAR,
-        repeat_penalty=kwargs.get("repeat_penalty", 1.1),
-    )
-    if not raw.strip():
-        raw_dbg = llm_generate(
+
+    stop_sequences = ["</json>"]
+    base_temperature = kwargs.get("temperature", 0.2)
+    repeat_penalty = kwargs.get("repeat_penalty", 1.1)
+
+    def _run(temp: float) -> str:
+        return llm_generate(
             "junior",
             prompt,
-            max_new_tokens=120,
-            temperature=0.3,
-            stop=["</json>"],
-            grammar=None,
+            max_new_tokens=max_new_tokens,
+            temperature=temp,
+            stop=stop_sequences,
+            repeat_penalty=repeat_penalty,
         )
-        raise RuntimeError(f"Junior produced empty output; dbg:\n{raw_dbg[:500]}")
-    if raw and not raw.strip().endswith("</json>"):
-        raw = raw.strip() + "</json>"
+
+    raw = _run(base_temperature).strip()
+    if raw and not raw.endswith("</json>"):
+        raw = f"{raw}</json>"
 
     block = _extract_json(raw)
     if not block:
-        raise RuntimeError(f"Junior returned non-JSON: {raw[:2000]}")
+        retry_raw = _run(0.1).strip()
+        if retry_raw and not retry_raw.endswith("</json>"):
+            retry_raw = f"{retry_raw}</json>"
+        block = _extract_json(retry_raw)
+        if not block:
+            snippet = retry_raw if retry_raw else raw
+            raise RuntimeError(f"Junior returned non-JSON: {snippet[:2000]}")
+        raw = retry_raw
     data = json.loads(block)
 
     if "neuro_update.levels" in data and "neuro_update" not in data:
