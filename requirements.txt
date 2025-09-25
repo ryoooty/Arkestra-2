@@ -1,13 +1,7 @@
-fastapi
-uvicorn
-pydantic
-jsonschema
-apscheduler
-tiktoken
 PyYAML>=6.0.1
 llama-cpp-python>=0.2.90
-torch==2.3.1+cu121  # CUDA 12.1 build
 transformers>=4.44.0
+torch==2.3.1+cu121  # CUDA 12.1 build
 bitsandbytes==0.43.1
 accelerate>=0.33.0
 sentence-transformers>=2.7.0
@@ -16,3 +10,5 @@ peft>=0.11.1
 trl>=0.9.6
 faiss-cpu
 huggingface_hub>=0.23.4
+tqdm
+numpy
