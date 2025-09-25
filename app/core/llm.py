@@ -39,21 +39,15 @@ def _model_cfg(role: str) -> Dict[str, Any]:
     return _load_cfg().get(role, {})
 
 
-def _apply_stops(
-    text: str, stops: Optional[List[str]]
-) -> tuple[str, bool, Optional[str]]:
+def _apply_stops(text: str, stops):
     if not stops:
-        return text, False, None
+        return text
     cut = len(text)
-    truncated_by: Optional[str] = None
-    for stop in stops:
-        if not stop:
-            continue
-        idx = text.find(stop)
-        if idx != -1 and idx < cut:
-            cut = idx
-            truncated_by = stop
-    return text[:cut], truncated_by is not None, truncated_by
+    for s in stops:
+        i = text.find(s)
+        if i != -1:
+            cut = min(cut, i)
+    return text[:cut]
 
 
 def _generate_with_llama_cpp(
@@ -74,18 +68,24 @@ def _generate_with_llama_cpp(
     if _LLAMA_JR is None:
         _LLAMA_JR = Llama(model_path=model_path, n_ctx=4096, n_threads=int(cfg.get("n_threads", 12)))
 
-    stops = list(stop or cfg.get("stop") or [])
-    if role == "senior" and "</json>" not in stops:
-        stops.append("</json>")
+    base_stops = list(stop or cfg.get("stop") or [])
+    stops = base_stops + ["</json>", "`", "\n\n"]
+    if role == "junior":
+        requested_tokens = max_new_tokens if max_new_tokens is not None else cfg.get("max_new_tokens", 64)
+        if requested_tokens is None:
+            requested_tokens = 64
+        max_tokens = max(128, int(requested_tokens))
+    else:
+        max_tokens = int(max_new_tokens if max_new_tokens is not None else cfg.get("max_new_tokens", 64))
     out = _LLAMA_JR.create_chat_completion(
         messages=[{"role": "user", "content": prompt}],
         temperature=float(temperature if temperature is not None else cfg.get("temperature", 0.2)),
-        max_tokens=int(max_new_tokens if max_new_tokens is not None else cfg.get("max_new_tokens", 64)),
+        max_tokens=max_tokens,
         stop=stops,
     )
     text = out["choices"][0]["message"]["content"]
-    trimmed, truncated, truncated_stop = _apply_stops(text, stops)
-    if truncated and truncated_stop == "</json>" and "</json>" not in trimmed:
+    trimmed = _apply_stops(text, stops)
+    if "</json>" in stops and "</json>" in text and "</json>" not in trimmed:
         trimmed = f"{trimmed}</json>"
     return trimmed
 
@@ -130,8 +130,8 @@ def _generate_with_transformers(
         max_new_tokens=int(max_new_tokens if max_new_tokens is not None else cfg.get("max_new_tokens", 512)),
     )
     text = _SEN_TOK.decode(gen[0], skip_special_tokens=True)
-    trimmed, truncated, truncated_stop = _apply_stops(text, stops)
-    if truncated and truncated_stop == "</json>" and "</json>" not in trimmed:
+    trimmed = _apply_stops(text, stops)
+    if "</json>" in stops and "</json>" in text and "</json>" not in trimmed:
         trimmed = f"{trimmed}</json>"
     return trimmed
 
