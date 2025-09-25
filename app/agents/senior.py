@@ -50,10 +50,47 @@ def _build_prompt(payload: Dict[str, Any]) -> str:
     )
 
 
+def _resolve_stop_sequences() -> list[str]:
+    """Combine configured senior stop sequences with a default paragraph break."""
+
+    cfg_stop = _CFG.get("senior", {}).get("stop")
+    stops: list[str] = []
+    if isinstance(cfg_stop, (list, tuple)):
+        stops.extend([s for s in cfg_stop if s])
+    elif isinstance(cfg_stop, str) and cfg_stop:
+        stops.append(cfg_stop)
+    if "\n\n" not in stops:
+        stops.append("\n\n")
+    return stops
+
+
 def generate_structured(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Generate a structured reply for the senior agent.
+
+    The ``preset`` parameter originates from ``neuro.bias_to_style()`` and conveys
+    sampling overrides (``temperature``), output length caps (``max_tokens``), and
+    stylistic bias hints. Temperature and max token limits are forwarded directly
+    into ``llm.generate`` so that the preset truly shapes generation dynamics.
+    """
+
     prompt = _build_prompt(payload)
-    temp = _CFG.get("senior", {}).get("temperature", 0.7)
-    raw = llm_generate("senior", prompt, max_new_tokens=512, temperature=temp, stop=["\n\n"])
+    cfg = _CFG.get("senior", {})
+    preset = payload.get("preset") or {}
+    temperature = preset.get("temperature")
+    if not isinstance(temperature, (int, float)):
+        temperature = cfg.get("temperature", 0.7)
+    max_tokens = preset.get("max_tokens")
+    if not isinstance(max_tokens, int):
+        max_tokens = cfg.get("max_new_tokens", 512)
+    stop_sequences = _resolve_stop_sequences()
+
+    raw = llm_generate(
+        "senior",
+        prompt,
+        max_new_tokens=max_tokens,
+        temperature=temperature,
+        stop=stop_sequences,
+    )
     # Extract JSON
     try:
         data = json.loads(raw)
