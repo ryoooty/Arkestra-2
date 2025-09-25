@@ -109,7 +109,7 @@ def _extract_json_block(raw: str) -> str | None:
 
 def _parse_reply(raw: str) -> dict:
     block = _extract_json_block(raw)
-    if not block:
+    if not block or not block.strip():
         raise ValueError("No JSON block found in model output")
     # Сначала строгий json
     try:
@@ -170,7 +170,10 @@ def generate_structured(payload: Dict[str, Any]) -> Dict[str, Any]:
         )
         if not raw2.strip().endswith("</json>"):
             raw2 = raw2.strip() + "</json>"
-        data = _parse_reply(raw2)
+        try:
+            data = _parse_reply(raw2)
+        except Exception:
+            data = {"text": "Извини, у меня сбой формата ответа."}
     try:
         validate(instance=data, schema=_SCHEMA)
     except ValidationError:
