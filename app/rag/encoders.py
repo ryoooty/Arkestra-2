@@ -75,9 +75,9 @@ def _encode_with_qwen(texts: List[str]):
     with torch.no_grad():
         outputs = model(**inputs)
 
-    cls_embeddings = outputs.last_hidden_state[:, 0, :]
-    normalized = F.normalize(cls_embeddings, p=2, dim=1)
-    return normalized.detach().to("cpu").float().numpy()
+    vec = outputs.last_hidden_state[:, 0, :]
+    vec = F.normalize(vec, dim=-1)
+    return vec.detach().cpu().numpy().astype("float32")
 
 
 @lru_cache(maxsize=1)
