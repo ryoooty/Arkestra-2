@@ -5,7 +5,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+import os
 import yaml
+
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
 
 _CFG: Optional[Dict[str, Any]] = None
 _LLAMA_JUNIOR: Optional[Any] = None
