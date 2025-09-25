@@ -78,8 +78,8 @@ def _generate_with_llama_cpp(
         )
 
     stops = list(stop or cfg.get("stop") or [])
-    if role == "junior" and not stops:
-        stops = ["</json>"]
+    if role in {"junior", "senior"} and "</json>" not in stops:
+        stops.append("</json>")
 
     if role == "junior":
         requested_tokens = max_new_tokens if max_new_tokens is not None else cfg.get("max_new_tokens", 160)
@@ -97,7 +97,7 @@ def _generate_with_llama_cpp(
         repeat_penalty_value = 1.1
 
     completion_kwargs: Dict[str, Any] = {
-        "messages": [{"role": "user", "content": prompt}],
+        "prompt": prompt,
         "temperature": temperature_value,
         "max_tokens": max_tokens,
     }
@@ -108,8 +108,8 @@ def _generate_with_llama_cpp(
     if repeat_penalty_value is not None:
         completion_kwargs["repeat_penalty"] = float(repeat_penalty_value)
 
-    out = _LLAMA_JR.create_chat_completion(**completion_kwargs)
-    text = out["choices"][0]["message"]["content"]
+    out = _LLAMA_JR.create_completion(**completion_kwargs)
+    text = out["choices"][0]["text"]
     trimmed = _apply_stops(text, stops)
     if stops and "</json>" in stops and "</json>" in text and "</json>" not in trimmed:
         trimmed = f"{trimmed}</json>"

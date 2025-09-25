@@ -74,7 +74,9 @@ STRICT_JSON_JR = dedent(
 No markdown, no code fences, no extra text. Output must be inside <json>...</json>."""
 )
 
-JR_GRAMMAR = LlamaGrammar.from_json_schema(JR_JSON_SCHEMA) if LlamaGrammar else None
+JR_GRAMMAR = (
+    LlamaGrammar.from_json_schema(json.dumps(JR_JSON_SCHEMA)) if LlamaGrammar else None
+)
 
 
 def _extract_json(raw: str) -> str | None:
@@ -117,24 +119,33 @@ def _build_prompt(payload: Dict[str, Any]) -> str:
     )
 
 
-def generate(payload: Dict[str, Any]) -> Dict[str, Any]:
+def generate(payload: Dict[str, Any], **kwargs) -> Dict[str, Any]:
     prompt = STRICT_JSON_JR + "\n\n" + _build_prompt(payload) + "\n\nOutput:\n<json>"
+    requested_tokens = kwargs.get("max_new_tokens")
+    if isinstance(requested_tokens, int):
+        max_new_tokens = max(160, requested_tokens)
+    else:
+        max_new_tokens = 160
+    stop_sequences = kwargs.get("stop")
+    if stop_sequences is None:
+        stop_sequences = ["</json>"]
     raw = llm_generate(
         "junior",
         prompt,
-        max_new_tokens=160,
-        temperature=0.2,
-        stop=["</json>"],
+        max_new_tokens=max_new_tokens,
+        temperature=kwargs.get("temperature", 0.2),
+        stop=stop_sequences,
         grammar=JR_GRAMMAR,
-        repeat_penalty=1.1,
+        repeat_penalty=kwargs.get("repeat_penalty", 1.1),
     )
     if not raw.strip():
         raw_dbg = llm_generate(
             "junior",
             prompt,
-            max_new_tokens=80,
+            max_new_tokens=120,
             temperature=0.3,
-            stop=[],
+            stop=["</json>"],
+            grammar=None,
         )
         raise RuntimeError(f"Junior produced empty output; dbg:\n{raw_dbg[:500]}")
     if raw and not raw.strip().endswith("</json>"):
