@@ -30,9 +30,12 @@ def set_primary(args: Dict) -> Dict:
     alias = (args.get("alias") or "").strip()
     if not alias:
         return {"ok": False, "error": "alias required"}
-    with get_conn() as c:
-        c.execute("UPDATE aliases SET is_primary=0 WHERE user_id=?", (user_id,))
-        c.execute("UPDATE aliases SET is_primary=1 WHERE user_id=? AND alias=?", (user_id, alias))
-        if c.rowcount == 0:
-            return {"ok": False, "error": "alias not found"}
-    return {"ok": True, "primary": alias}
+    with get_conn() as conn:
+        cur = conn.execute("UPDATE aliases SET is_primary=0 WHERE user_id=?", (user_id,))
+        cur = conn.execute(
+            "UPDATE aliases SET is_primary=1 WHERE user_id=? AND alias=?",
+            (user_id, alias),
+        )
+        updated = cur.rowcount
+        conn.commit()
+    return {"ok": bool(updated), "updated": int(updated)}
