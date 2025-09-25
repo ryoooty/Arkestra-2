@@ -99,6 +99,10 @@ def add_texts(X: np.ndarray, encoder_name: str | None = None) -> None:
             encoder_name = get_encoder_name()
     else:
         X = np.asarray(X, dtype=np.float32)
+        if encoder_name is None:
+            from app.rag.encoders import get_encoder_name  # local import to avoid cycle
+
+            encoder_name = get_encoder_name()
 
     if X.ndim != 2:
         raise ValueError("Expected embeddings with shape (n, d)")
@@ -120,14 +124,14 @@ def add_texts(X: np.ndarray, encoder_name: str | None = None) -> None:
         except Exception:
             existing_dim = None
 
-    index = _index or _load_index_from_disk()
-
+    index = None
     if existing_dim is not None and existing_dim != dim:
         reset_index()
-        index = None
-    elif index is not None and getattr(index, "d", None) != dim:
-        reset_index()
-        index = None
+    else:
+        index = _index or _load_index_from_disk()
+        if index is not None and getattr(index, "d", None) != dim:
+            reset_index()
+            index = None
 
     if index is None:
         index = faiss.IndexFlatIP(dim)
