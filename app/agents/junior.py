@@ -11,11 +11,44 @@ junior.py — DeepSeek (≤3B). Роль: диспетчер и регулято
 !!! Junior НЕ пишет финальный ответ пользователю и НЕ знает схем аргументов инструментов.
 """
 
+import re, json
+from textwrap import dedent
 from typing import Dict, Any
-import json
 from pathlib import Path
 from jsonschema import validate, ValidationError
 from app.core.llm import generate as llm_generate
+
+STRICT_JSON_JR = dedent("""Return ONLY valid JSON (double quotes), no markdown, no code fences.
+Wrap JSON in <json> and </json>. No extra text.
+Schema:
+{
+  "intent": "smalltalk|ask|task|joke|other",
+  "suggestions": [{"kind":"good","text":"..."},{"kind":"mischief","text":"..."}],
+  "rag_query": null | string,
+  "rag_targets": null | string[],
+  "style_directive": string | null,
+  "memory_hint": string[],
+  "neuro_update": { "levels": { "dopamine":int,"serotonin":int,"norepinephrine":int,"acetylcholine":int } },
+  "proactive": {"allow":bool,"reason":string,"cooldown_s":int},
+  "tools_hint": string | null,
+  "tools_request": null | string[]
+}
+""")
+
+
+def _extract_json(raw: str) -> str | None:
+    if not raw:
+        return None
+    m = re.search(r"<json>(.+?)</json>", raw, flags=re.S | re.I)
+    if m:
+        return m.group(1).strip()
+    m = re.search(r"```(?:json)?\s*(.+?)```", raw, flags=re.S | re.I)
+    if m:
+        return m.group(1).strip()
+    s, e = raw.find("{"), raw.rfind("}")
+    if s != -1 and e != -1 and e > s:
+        return raw[s : e + 1].strip()
+    return None
 
 _SCHEMA = json.loads(Path("config/schemas/junior.v2.schema.json").read_text(encoding="utf-8"))
 
@@ -43,19 +76,22 @@ def _build_prompt(payload: Dict[str, Any]) -> str:
 
 
 def generate(payload: Dict[str, Any]) -> Dict[str, Any]:
-    prompt = _build_prompt(payload)
-    raw = llm_generate("junior", prompt, max_new_tokens=64, temperature=0.2, stop=["\n\n"])
-    # Try to extract JSON
-    try:
-        data = json.loads(raw)
-    except Exception:
-        # try to strip code fences or text before/after
-        start = raw.find("{")
-        end = raw.rfind("}")
-        if start >= 0 and end >= 0 and end > start:
-            data = json.loads(raw[start:end+1])
-        else:
-            raise RuntimeError(f"Junior returned non-JSON: {raw}")
+    prompt = f"{STRICT_JSON_JR}\n\n{_build_prompt(payload)}\n\nOutput:\n<json>"
+    raw = llm_generate(
+        "junior",
+        prompt,
+        max_new_tokens=128,
+        temperature=0.2,
+        stop=["</json>", "\n", "\n\n"],
+    )
+    if raw and not raw.strip().endswith("</json>"):
+        raw = raw.strip() + "</json>"
+    block = _extract_json(raw)
+    if not block:
+        raise RuntimeError(f"Junior returned non-JSON: {raw[:2000]}")
+    data = json.loads(block)
+    if "neuro_update.levels" in data and "neuro_update" not in data:
+        data["neuro_update"] = {"levels": data.pop("neuro_update.levels")}
     # Validate
     try:
         validate(instance=data, schema=_SCHEMA)
