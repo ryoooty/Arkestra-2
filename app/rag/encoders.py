@@ -35,6 +35,7 @@ _e5_failed = False
 
 _qwen_tokenizer = None
 _qwen_model = None
+_qwen_remote_attempted = False
 _active_encoder: Optional[str] = None
 
 
@@ -145,24 +146,39 @@ def _load_rag_config():
 
 
 def _load_qwen():
-    global _qwen_tokenizer, _qwen_model
+    global _qwen_tokenizer, _qwen_model, _qwen_remote_attempted
     if _qwen_tokenizer is not None and _qwen_model is not None:
         return _qwen_tokenizer, _qwen_model
 
-    try:  # pragma: no cover - optional dependency fallback
+    if AutoTokenizer is None or AutoModel is None or torch is None:
+        return None, None
+
+    def _try_load(local_files_only: bool):
         tokenizer = AutoTokenizer.from_pretrained(
             "Qwen/Qwen3-Embedding-0.6B",
             trust_remote_code=True,
+            local_files_only=local_files_only,
         )
         model = AutoModel.from_pretrained(
             "Qwen/Qwen3-Embedding-0.6B",
             trust_remote_code=True,
             torch_dtype=torch.float16,
             device_map="auto",
+            local_files_only=local_files_only,
         )
         model.eval()
-    except Exception:  # pragma: no cover - optional dependency fallback
-        return None, None
+        return tokenizer, model
+
+    try:  # pragma: no cover - optional dependency fallback
+        tokenizer, model = _try_load(local_files_only=True)
+    except Exception:
+        if _qwen_remote_attempted:
+            return None, None
+        _qwen_remote_attempted = True
+        try:
+            tokenizer, model = _try_load(local_files_only=False)
+        except Exception:  # pragma: no cover - optional dependency fallback
+            return None, None
 
     _qwen_tokenizer = tokenizer
     _qwen_model = model
