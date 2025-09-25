@@ -39,21 +39,26 @@ def _model_cfg(role: str) -> Dict[str, Any]:
     return _load_cfg().get(role, {})
 
 
-def _apply_stops(text: str, stops: Optional[List[str]]) -> str:
+def _apply_stops(
+    text: str, stops: Optional[List[str]]
+) -> tuple[str, bool, Optional[str]]:
     if not stops:
-        return text
+        return text, False, None
     cut = len(text)
+    truncated_by: Optional[str] = None
     for stop in stops:
         if not stop:
             continue
         idx = text.find(stop)
-        if idx != -1:
-            cut = min(cut, idx)
-    return text[:cut]
+        if idx != -1 and idx < cut:
+            cut = idx
+            truncated_by = stop
+    return text[:cut], truncated_by is not None, truncated_by
 
 
 def _generate_with_llama_cpp(
     cfg: Dict[str, Any],
+    role: str,
     prompt: str,
     stop: Optional[List[str]],
     max_new_tokens: Optional[int],
@@ -70,6 +75,8 @@ def _generate_with_llama_cpp(
         _LLAMA_JR = Llama(model_path=model_path, n_ctx=4096, n_threads=int(cfg.get("n_threads", 12)))
 
     stops = list(stop or cfg.get("stop") or [])
+    if role == "senior" and "</json>" not in stops:
+        stops.append("</json>")
     out = _LLAMA_JR.create_chat_completion(
         messages=[{"role": "user", "content": prompt}],
         temperature=float(temperature if temperature is not None else cfg.get("temperature", 0.2)),
@@ -77,11 +84,15 @@ def _generate_with_llama_cpp(
         stop=stops,
     )
     text = out["choices"][0]["message"]["content"]
-    return _apply_stops(text, stops)
+    trimmed, truncated, truncated_stop = _apply_stops(text, stops)
+    if truncated and truncated_stop == "</json>" and "</json>" not in trimmed:
+        trimmed = f"{trimmed}</json>"
+    return trimmed
 
 
 def _generate_with_transformers(
     cfg: Dict[str, Any],
+    role: str,
     prompt: str,
     stop: Optional[List[str]],
     max_new_tokens: Optional[int],
@@ -110,6 +121,8 @@ def _generate_with_transformers(
 
     inputs = _SEN_TOK(prompt, return_tensors="pt").to(_SEN_MDL.device)
     stops = list(stop or cfg.get("stop") or [])
+    if role == "senior" and "</json>" not in stops:
+        stops.append("</json>")
     gen = _SEN_MDL.generate(
         **inputs,
         do_sample=True,
@@ -117,7 +130,10 @@ def _generate_with_transformers(
         max_new_tokens=int(max_new_tokens if max_new_tokens is not None else cfg.get("max_new_tokens", 512)),
     )
     text = _SEN_TOK.decode(gen[0], skip_special_tokens=True)
-    return _apply_stops(text, stops)
+    trimmed, truncated, truncated_stop = _apply_stops(text, stops)
+    if truncated and truncated_stop == "</json>" and "</json>" not in trimmed:
+        trimmed = f"{trimmed}</json>"
+    return trimmed
 
 
 def generate(
@@ -126,14 +142,21 @@ def generate(
     max_new_tokens: Optional[int] = None,
     temperature: Optional[float] = None,
     stop: Optional[List[str]] = None,
+    repair: bool = False,
 ) -> str:
     """Generate a local LLM response for the requested role."""
+
+    if repair:
+        if temperature is None:
+            temperature = 0.1
+        else:
+            temperature = max(0.0, min(0.2, float(temperature)))
 
     cfg = _model_cfg(role)
     provider = cfg.get("provider", "")
 
     if provider == "llama-cpp":
-        return _generate_with_llama_cpp(cfg, prompt, stop, max_new_tokens, temperature)
+        return _generate_with_llama_cpp(cfg, role, prompt, stop, max_new_tokens, temperature)
     if provider == "transformers":
-        return _generate_with_transformers(cfg, prompt, stop, max_new_tokens, temperature)
+        return _generate_with_transformers(cfg, role, prompt, stop, max_new_tokens, temperature)
     raise ValueError(f"Unsupported provider: {provider}")
