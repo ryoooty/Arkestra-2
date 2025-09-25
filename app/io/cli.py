@@ -7,15 +7,25 @@ from app.memory.db import (
     last_assistant_msg_id,
     mark_approved,
 )
+from scripts import migrate as migrate_script
 from scripts.consolidate_sleep import run_sleep_batch
 
 
+HELP_TEXT = (
+    "Commands: /help /quit /sleep /up /down /fb <text> /ok"
+)
+
+
+def _print_help() -> None:
+    print(HELP_TEXT)
+
+
 def main():
+    migrate_script.migrate()
     init_scheduler()
 
     user_id = "local-user"
-    init_scheduler()
-    print("Arkestra CLI. Type 'quit' to exit. Commands: /up /down /fb <text> /ok")
+    print("Arkestra CLI. Type '/help' for available commands.")
 
     while True:
         try:
@@ -24,8 +34,12 @@ def main():
             break
 
         t = text.strip()
-        if t in {"quit", "exit"}:
+        if t in {"/quit", "quit", "exit"}:
             break
+
+        if t in {"/help", "help"}:
+            _print_help()
+            continue
 
         if t == "/up":
             mid = last_assistant_msg_id(user_id)

@@ -16,6 +16,21 @@ except Exception:  # pragma: no cover - runtime safeguard
     Bot = None  # type: ignore[assignment]
 
 _cfg = None
+_tools_cfg = None
+
+
+def _load_tools_cfg() -> Dict:
+    global _tools_cfg
+    if _tools_cfg is None:
+        text = Path("config/tools.yaml").read_text(encoding="utf-8")
+        _tools_cfg = yaml.safe_load(text) or {}
+    return _tools_cfg
+
+
+def _telegram_enabled() -> bool:
+    tools_cfg = _load_tools_cfg()
+    features = tools_cfg.get("features") or {}
+    return bool(features.get("telegram_enabled"))
 
 
 def _load_cfg() -> Dict:
@@ -26,6 +41,9 @@ def _load_cfg() -> Dict:
 
 
 def main(args: Dict) -> Dict:
+    if not _telegram_enabled():
+        return {"ok": False, "error": "telegram_disabled"}
+
     cfg = _load_cfg()
     token = cfg.get("bot_token")
     if not token or Bot is None:
