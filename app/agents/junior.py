@@ -99,6 +99,7 @@ _SCHEMA = json.loads(Path("config/schemas/junior.v2.schema.json").read_text(enco
 _SYS = """You are JUNIOR for Arkestra.
 Return ONLY compact JSON v2 with keys: intent, tools_hint, (optional) tools_request, rag_query, style_directive, neuro_update.levels, neuro_update.reason.
 Do NOT write the user's final answer.
+Suggestions[].text must stay in the user's language, sound warm, and contain at least 12 words.
 Keep under 120 tokens."""
 
 

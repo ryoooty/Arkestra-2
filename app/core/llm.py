@@ -59,6 +59,7 @@ def _generate_with_llama_cpp(
     temperature: Optional[float],
     grammar: Optional[Any],
     repeat_penalty: Optional[float],
+    top_p: Optional[float],
 ) -> str:
     global _LLAMA_JR
     from llama_cpp import Llama
@@ -110,6 +111,9 @@ def _generate_with_llama_cpp(
         completion_kwargs["grammar"] = grammar
     if repeat_penalty_value is not None:
         completion_kwargs["repeat_penalty"] = float(repeat_penalty_value)
+    top_p_value = top_p if top_p is not None else cfg.get("top_p")
+    if top_p_value is not None:
+        completion_kwargs["top_p"] = float(top_p_value)
 
     out = _LLAMA_JR.create_completion(**completion_kwargs)
     text = out["choices"][0]["text"]
@@ -128,6 +132,7 @@ def _generate_with_transformers(
     temperature: Optional[float],
     grammar: Optional[Any],
     repeat_penalty: Optional[float],
+    top_p: Optional[float],
 ) -> str:
     global _SEN_TOK, _SEN_MDL
 
@@ -154,11 +159,18 @@ def _generate_with_transformers(
     stops = list(stop or cfg.get("stop") or [])
     if role == "senior" and "</json>" not in stops:
         stops.append("</json>")
+    sampling_kwargs: Dict[str, Any] = {
+        "do_sample": True,
+        "temperature": float(temperature if temperature is not None else cfg.get("temperature", 0.7)),
+        "max_new_tokens": int(max_new_tokens if max_new_tokens is not None else cfg.get("max_new_tokens", 512)),
+    }
+    top_p_value = top_p if top_p is not None else cfg.get("top_p")
+    if top_p_value is not None:
+        sampling_kwargs["top_p"] = float(top_p_value)
+
     gen = _SEN_MDL.generate(
         **inputs,
-        do_sample=True,
-        temperature=float(temperature if temperature is not None else cfg.get("temperature", 0.7)),
-        max_new_tokens=int(max_new_tokens if max_new_tokens is not None else cfg.get("max_new_tokens", 512)),
+        **sampling_kwargs,
     )
     text = _SEN_TOK.decode(gen[0], skip_special_tokens=True)
     trimmed = _apply_stops(text, stops)
@@ -176,6 +188,7 @@ def generate(
     repair: bool = False,
     grammar: Optional[Any] = None,
     repeat_penalty: Optional[float] = None,
+    top_p: Optional[float] = None,
 ) -> str:
     """Generate a local LLM response for the requested role."""
 
@@ -198,6 +211,7 @@ def generate(
             temperature,
             grammar,
             repeat_penalty,
+            top_p,
         )
     if provider == "transformers":
         return _generate_with_transformers(
@@ -209,5 +223,6 @@ def generate(
             temperature,
             grammar,
             repeat_penalty,
+            top_p,
         )
     raise ValueError(f"Unsupported provider: {provider}")
