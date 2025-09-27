@@ -1,6 +1,7 @@
 """
 senior.py — Mistral-7B. Роль: исполнитель и стилист.
-ВХОД: history, user_text, rag_hits, junior_json_v2, preset (из нейро), style_directive, env_brief, tool_instructions (полные)
+ВХОД: history, user_text, rag_hits, jr_ctrl (intent/tools/rag/neuro), jr_advice (свободный текст), preset (из нейро),
+style_directive, env_brief, tool_instructions (полные)
 ВЫХОД (Reply JSON):
 - text
 - tool_calls[] (name, args)
@@ -45,8 +46,8 @@ def _context_block(payload: Dict[str, Any]) -> str:
     env_brief = payload.get("env_brief") or {}
     style_hint = payload.get("style_hint") or {}
     style_directive = payload.get("style_directive") or ""
-    junior_json = payload.get("junior_json") or {}
-    jr_suggestions = payload.get("jr_suggestions") or []
+    jr_ctrl = payload.get("jr_ctrl") or {}
+    jr_advice = payload.get("jr_advice") or ""
     rag_hits = payload.get("rag_hits") or []
     tool_instructions = payload.get("tool_instructions") or {}
 
@@ -58,12 +59,13 @@ def _context_block(payload: Dict[str, Any]) -> str:
         "Environment:\n" + _format_json(env_brief),
         "Style hint:\n" + _format_json(style_hint),
         f"Style directive:\n{style_directive or '—'}",
-        "Junior suggestions (top-3):\n" + _format_json(jr_suggestions),
-        "Junior meta:\n" + _format_json(junior_json),
+        "Junior ctrl:\n" + _format_json(jr_ctrl),
+        f"Junior advice:\n{jr_advice or '—'}",
         "Tool instructions:\n" + _format_json(tool_instructions),
         "RAG hits:\n" + _format_json(rag_hits),
     ]
     return "\n\n".join(sections)
+
 
 
 def _task_block(payload: Dict[str, Any]) -> str:
@@ -135,7 +137,7 @@ def generate_structured(payload: Dict[str, Any]) -> Dict[str, Any]:
     max_tokens = preset.get("max_tokens")
     if not isinstance(max_tokens, int):
         max_tokens = cfg.get("max_new_tokens", 512)
-    intent = str((payload.get("junior_json") or {}).get("intent") or "").lower()
+    intent = str((payload.get("jr_ctrl") or {}).get("intent") or "").lower()
     stops = ["</json>"]
     raw = llm_generate(
         "senior",
@@ -199,7 +201,7 @@ def _maybe_refine_smalltalk(
     data: Dict[str, Any],
     max_tokens: int,
 ) -> Dict[str, Any]:
-    jr_intent = str((payload.get("junior_json") or {}).get("intent") or "").lower()
+    jr_intent = str((payload.get("jr_ctrl") or {}).get("intent") or "").lower()
     text = str(data.get("text", ""))
     if jr_intent != "smalltalk" or len(text.split()) >= 20:
         return data
