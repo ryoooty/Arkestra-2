@@ -12,7 +12,6 @@ from typing import Any, Dict, List, Optional
 
 import torch
 import yaml
-from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
 _CFG: Optional[Dict[str, Any]] = None
 _LLAMA_JR = None
@@ -20,6 +19,41 @@ _SEN_TOK = None
 _SEN_MDL = None
 _JR_TOK = None
 _JR_MDL = None
+
+
+def _sen_load_transformers(cfg: Dict[str, Any]) -> None:
+    global _SEN_TOK, _SEN_MDL
+
+    if _SEN_MDL is not None and _SEN_TOK is not None:
+        return
+
+    from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+
+    model_id = cfg.get("model_id") or cfg.get("model_path")
+    if not model_id:
+        raise ValueError("Senior transformers configuration requires 'model_id' or 'model_path'.")
+
+    bnb = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_use_double_quant=True,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_compute_dtype=torch.float16,
+    )
+
+    local_files_only = cfg.get("local_files_only")
+    if local_files_only is None:
+        local_files_only = bool(cfg.get("model_path"))
+
+    _SEN_TOK = AutoTokenizer.from_pretrained(model_id, use_fast=True, local_files_only=local_files_only)
+    _SEN_MDL = AutoModelForCausalLM.from_pretrained(
+        model_id,
+        quantization_config=bnb,
+        device_map=cfg.get("device_map", "auto"),
+        torch_dtype=torch.float16,
+        low_cpu_mem_usage=True,
+        local_files_only=local_files_only,
+    )
+    _SEN_MDL.eval()
 
 
 def _load_cfg() -> Dict[str, Any]:
@@ -59,6 +93,8 @@ def _jr_load_transformers(cfg: Dict[str, Any]) -> None:
 
     if _JR_MDL is not None and _JR_TOK is not None:
         return
+
+    from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
     model_id = cfg.get("model_id")
     if not model_id:
@@ -235,6 +271,14 @@ def _generate_with_llama_cpp(
     return trimmed
 
 
+def _sanitize_gen_flags(temperature: float | None, do_sample: bool | None):
+    if temperature is None:
+        temperature = 0.7
+    if temperature <= 0.05:
+        return 1e-6, False, 1.0
+    return float(temperature), True, 0.92
+
+
 def _generate_with_transformers(
     cfg: Dict[str, Any],
     role: str,
@@ -245,48 +289,53 @@ def _generate_with_transformers(
     grammar: Optional[Any],
     repeat_penalty: Optional[float],
     top_p: Optional[float],
-    do_sample: bool,
+    **kwargs: Any,
 ) -> str:
-    global _SEN_TOK, _SEN_MDL
+    _sen_load_transformers(cfg)
+    tok, mdl = _SEN_TOK, _SEN_MDL
 
-    model_path = cfg.get("model_path")
-    if not model_path or not Path(model_path).exists():
-        raise ValueError(f"Senior model path not found: {model_path}")
+    if tok is None or mdl is None:
+        raise RuntimeError("Senior transformers model failed to load.")
 
-    if _SEN_TOK is None or _SEN_MDL is None:
-        bnb = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_quant_type="nf4",
-            bnb_4bit_use_double_quant=True,
-            bnb_4bit_compute_dtype=torch.bfloat16,
-        )
-        _SEN_TOK = AutoTokenizer.from_pretrained(model_path, local_files_only=True, use_fast=True)
-        _SEN_MDL = AutoModelForCausalLM.from_pretrained(
-            model_path,
-            local_files_only=True,
-            quantization_config=bnb,
-            device_map="auto",
-        )
-
-    inputs = _SEN_TOK(prompt, return_tensors="pt").to(_SEN_MDL.device)
+    inputs = tok(prompt, return_tensors="pt").to(mdl.device)
     stops = list(stop or cfg.get("stop") or [])
     if role == "senior" and "</json>" not in stops:
         stops.append("</json>")
-    final_temperature = float(temperature if temperature is not None else cfg.get("temperature", 0.7))
-    top_p_value = top_p if top_p is not None else cfg.get("top_p")
-    repetition = repeat_penalty if repeat_penalty is not None else cfg.get("repetition_penalty", 1.05)
+    base_temperature = temperature if temperature is not None else cfg.get("temperature")
+    temp, do_sample, default_top_p = _sanitize_gen_flags(base_temperature, kwargs.get("do_sample"))
+    if top_p is not None:
+        top_p_value = float(top_p)
+    else:
+        top_p_value = default_top_p
 
-    gen = _SEN_MDL.generate(
+    repetition_penalty = kwargs.get("repetition_penalty")
+    if repetition_penalty is None:
+        if repeat_penalty is not None:
+            repetition_penalty = repeat_penalty
+        else:
+            repetition_penalty = 1.08 if do_sample else 1.0
+
+    eos_id = tok.eos_token_id
+    if eos_id is None:
+        eos_id = tok.pad_token_id
+
+    if eos_id is None:
+        raise ValueError("Tokenizer requires an EOS or PAD token for generation.")
+
+    gen = mdl.generate(
         **inputs,
         max_new_tokens=int(max_new_tokens if max_new_tokens is not None else cfg.get("max_new_tokens", 512)),
         do_sample=do_sample,
-        temperature=final_temperature,
-        top_p=float(top_p_value) if top_p_value is not None else (0.92 if do_sample else 1.0),
-        repetition_penalty=float(repetition),
-        pad_token_id=_SEN_TOK.eos_token_id,
-        eos_token_id=_SEN_TOK.eos_token_id,
+        temperature=temp,
+        top_p=top_p_value,
+        repetition_penalty=float(repetition_penalty),
+        use_cache=True,
+        pad_token_id=eos_id,
+        eos_token_id=eos_id,
     )
-    text = _SEN_TOK.decode(gen[0], skip_special_tokens=True)
+    input_length = inputs["input_ids"].shape[-1]
+    generated_tokens = gen[0][input_length:]
+    text = tok.decode(generated_tokens, skip_special_tokens=True)
     trimmed = _apply_stops(text, stops)
     if "</json>" in stops and "</json>" in text and "</json>" not in trimmed:
         trimmed = f"{trimmed}</json>"
@@ -369,6 +418,6 @@ def generate(
             grammar,
             repeat_penalty,
             top_p,
-            do_sample,
+            do_sample=do_sample,
         )
     raise ValueError(f"Unsupported provider: {provider}")

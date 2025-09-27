@@ -10,12 +10,10 @@ senior.py — Mistral-7B. Роль: исполнитель и стилист.
 
 from typing import Dict, Any
 from textwrap import dedent
-import re
 import json
 from jsonschema import validate, ValidationError
 from pathlib import Path
 import yaml
-from json_repair import repair_json
 from app.core.llm import generate as llm_generate
 from app.core.logs import log
 
@@ -27,11 +25,11 @@ _SYS = dedent(
     """
     Вы — Arkestra Senior, тёплый и внимательный русскоязычный ассистент.
     Верни СТРОГО валидный JSON по схеме reply.schema.json.
-    Требования:
-    1. Единственное, что ты выводишь — JSON между тегами <json> и </json>.
-    2. Поля: text (строка, без Markdown-кодовых блоков), опциональные tool_calls[], memory[], plan[].
-    3. Соблюдай предоставленные persona, env_brief, style_hint, style_directive и инструкцию инструментов.
-    4. Если инструментов не хватает, попроси пользователя добавить их, объясни зачем.
+    Единственное, что ты выводишь — JSON между тегами <json> и </json>.
+    Пример: <json>{"text":"пример ответа"}</json>.
+    Поля: text (строка, без Markdown-кодовых блоков), опциональные tool_calls[], memory[], plan[].
+    Соблюдай persona, env_brief, style_hint, style_directive и инструкцию инструментов.
+    Если инструментов не хватает, попроси пользователя добавить их и поясни зачем.
     """
 )
 
@@ -42,6 +40,7 @@ def _format_json(data: Any) -> str:
 
 def _context_block(payload: Dict[str, Any]) -> str:
     history = payload.get("history") or []
+    history_tail = payload.get("history_tail") or []
     persona = payload.get("persona") or {}
     env_brief = payload.get("env_brief") or {}
     style_hint = payload.get("style_hint") or {}
@@ -54,6 +53,7 @@ def _context_block(payload: Dict[str, Any]) -> str:
     sections = [
         "CONTEXT:",
         "History (latest last):\n" + _format_json(history),
+        "History tail (latest last):\n" + _format_json(history_tail),
         "Persona:\n" + _format_json(persona),
         "Environment:\n" + _format_json(env_brief),
         "Style hint:\n" + _format_json(style_hint),
@@ -86,38 +86,33 @@ def _task_block(payload: Dict[str, Any]) -> str:
 def _build_prompt(payload: Dict[str, Any]) -> str:
     context = _context_block(payload)
     task = _task_block(payload)
-    output_rules = "OUTPUT: Верни только <json>{...}</json> по заданной схеме."
+    output_rules = "OUTPUT: верни ТОЛЬКО JSON между тегами <json> и </json>."
     return "\n\n".join([_SYS.strip(), context, task, output_rules])
 
 
 def _extract_json_block(raw: str) -> str | None:
-    # 1) <json>...</json>
-    m = re.search(r"<json>(.+?)</json>", raw, flags=re.S | re.I)
+    import re
+
+    m = re.search(r"<json>(.+?)</json>", raw, re.S | re.I)
     if m:
-        return m.group(1).strip()
-    # 2)
-    m = re.search(r"```json\s*(.+?)```", raw, flags=re.S | re.I)
-    if m:
-        return m.group(1).strip()
-    # 3) Самые внешние { ... }
+        return m.group(1)
     start = raw.find("{")
     end = raw.rfind("}")
-    if start != -1 and end != -1 and end > start:
-        return raw[start : end + 1].strip()
-    return None
+    return raw[start : end + 1] if start != -1 and end != -1 and end > start else None
 
 
-def _parse_reply(raw: str) -> dict:
-    block = _extract_json_block(raw)
-    if not block or not block.strip():
-        raise ValueError("No JSON block found in model output")
-    # Сначала строгий json
+def _safe_json_loads(s: str) -> dict:
+    import json
+
     try:
-        return json.loads(block)
+        return json.loads(s)
     except Exception:
-        # Попробовать поправить мелкие косяки (одинарные кавычки, запятые и т.п.)
-        fixed = repair_json(block)
-        return json.loads(fixed)
+        try:
+            from json_repair import repair_json
+
+            return json.loads(repair_json(s))
+        except Exception:
+            return {}
 
 
 def generate_structured(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -140,40 +135,50 @@ def generate_structured(payload: Dict[str, Any]) -> Dict[str, Any]:
     max_tokens = preset.get("max_tokens")
     if not isinstance(max_tokens, int):
         max_tokens = cfg.get("max_new_tokens", 512)
+    intent = str((payload.get("junior_json") or {}).get("intent") or "").lower()
+    stops = ["</json>"]
     raw = llm_generate(
         "senior",
         prompt,
         max_new_tokens=max_tokens,
         temperature=temp,
-        top_p=0.92,
         repetition_penalty=1.08,
-        stop=["</json>"],
+        stop=stops,
     )
-    try:
-        data = _parse_reply(raw)
-    except Exception:
-        repair_prompt = dedent(
-            f"""
-            Предыдущий ответ невалидный. Верни ТОЛЬКО валидный JSON, по тем же правилам, между <json> и </json>.
-            Без любого дополнительного текста. Исправь ошибки формата.
+    block = _extract_json_block(raw)
+    data = _safe_json_loads(block or "")
 
-            ОРИГИНАЛ:
-            {raw[-2000:]}
-            """
-        )
+    if not data or "text" not in data:
         raw2 = llm_generate(
             "senior",
-            repair_prompt,
-            max_new_tokens=256,
-            temperature=0.0,
-            stop=["</json>"],
+            prompt,
+            max_new_tokens=max_tokens,
+            temperature=max(0.65, temp),
+            repetition_penalty=1.08,
+            stop=stops,
         )
-        if not raw2.strip().endswith("</json>"):
-            raw2 = raw2.strip() + "</json>"
-        try:
-            data = _parse_reply(raw2)
-        except Exception:
-            data = {"text": "Извини, у меня сбой формата ответа."}
+        block2 = _extract_json_block(raw2)
+        data2 = _safe_json_loads(block2 or "")
+        if data2:
+            data = data2
+
+    txt = (data.get("text") or "").strip()
+    if len(txt.split()) < (20 if intent == "smalltalk" else 8):
+        raw3 = llm_generate(
+            "senior",
+            prompt,
+            max_new_tokens=max_tokens,
+            temperature=max(0.7, temp),
+            repetition_penalty=1.08,
+            stop=stops,
+        )
+        data3 = _safe_json_loads(_extract_json_block(raw3) or "")
+        if (data3.get("text") or ""):
+            data = data3
+            txt = (data.get("text") or "").strip()
+
+    if not txt:
+        data = {"text": "Извини, у меня сбой формата ответа."}
     try:
         validate(instance=data, schema=_SCHEMA)
     except ValidationError:
@@ -224,11 +229,11 @@ def _maybe_refine_smalltalk(
         refine_prompt,
         max_new_tokens=max_tokens,
         temperature=0.65,
-        top_p=0.9,
+        repetition_penalty=1.08,
         stop=["</json>"],
     )
+    refined = _safe_json_loads(_extract_json_block(raw) or "")
     try:
-        refined = _parse_reply(raw)
         validate(instance=refined, schema=_SCHEMA)
     except Exception:
         refined = data
