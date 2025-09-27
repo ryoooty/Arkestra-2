@@ -1,97 +1,49 @@
 """
 junior.py — DeepSeek (≤3B). Роль: диспетчер и регулятор.
 ВХОД: history_tail, user_text, neuro_snapshot, env_brief, tools_catalog (название+краткое назначение).
-ВЫХОД (JSON v2):
-- intent
-- tools_hint[] (имена инструментов из каталога)
-- tools_request[] (если не хватает инструмента)
-- rag_query?
-- style_directive (короткая подсказка, как окрасить ответ)
-- neuro_update.levels (целевые уровни нейро)
-!!! Junior НЕ пишет финальный ответ пользователю и НЕ знает схем аргументов инструментов.
+ВЫХОД: два текстовых блока <ctrl> и <advice> без JSON.
+<ctrl> — строки key=value (intent, tools, rag_query, нейроуровни).
+<advice> — короткая подсказка для senior о стиле и содержании ответа.
+Junior НЕ пишет финальный ответ пользователю и НЕ знает схем аргументов инструментов.
 """
 
 from typing import Dict, Any
-import re, json
+import re
 from textwrap import dedent
-from pathlib import Path
-from jsonschema import validate, ValidationError
 
 from app.core.llm import generate as llm_generate
 
-JR_JSON_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "intent": {"type": "string"},
-        "suggestions": {"type": "array"},
-        "rag_query": {"type": ["string", "null"]},
-        "rag_targets": {"type": ["array", "null"]},
-        "style_directive": {"type": ["string", "null"]},
-        "memory_hint": {"type": "array"},
-        "neuro_update": {
-            "type": "object",
-            "properties": {
-                "levels": {
-                    "type": "object",
-                    "properties": {
-                        "dopamine": {"type": "integer"},
-                        "serotonin": {"type": "integer"},
-                        "norepinephrine": {"type": "integer"},
-                        "acetylcholine": {"type": "integer"},
-                    },
-                    "required": [
-                        "dopamine",
-                        "serotonin",
-                        "norepinephrine",
-                        "acetylcholine",
-                    ],
-                }
-            },
-            "required": ["levels"],
-        },
-        "proactive": {
-            "type": "object",
-            "properties": {
-                "allow": {"type": "boolean"},
-                "reason": {"type": "string"},
-                "cooldown_s": {"type": "integer"},
-            },
-            "required": ["allow", "reason", "cooldown_s"],
-        },
-        "tools_hint": {"type": ["string", "null"]},
-        "tools_request": {"type": ["array", "null"]},
-    },
-    "required": ["intent", "suggestions", "memory_hint", "neuro_update", "proactive"],
-}
+_SYS = dedent(
+    """
+    You are JUNIOR for Arkestra.
+    Always answer with exactly two plain text blocks without JSON or Markdown fences.
 
-STRICT_JSON_JR = dedent(
-    """Return ONLY valid JSON according to the schema.
-No markdown, no code fences, no extra text. Output must be inside <json>...</json>."""
-)
+    <ctrl>
+    intent=smalltalk
+    tools=note.create,reminder.create
+    rag_query=
+    dopamine=0; serotonin=0; norepinephrine=0; acetylcholine=0
+    </ctrl>
+
+    <advice>
+    Friendly short note for Senior about tone, structure, key points to cover.
+    </advice>
+
+    Rules:
+    - <ctrl> block must list key=value pairs, one per line, lowercase keys.
+    - intent: classify the user request (smalltalk/task/ask/other...)
+    - tools: comma-separated tool names from catalog (no descriptions). Leave empty if none.
+    - rag_query: short search query or leave empty.
+    - Provide dopamine, serotonin, norepinephrine, acetylcholine levels as integers -2..+2 ("+1", "0", "-1").
+    - If a level is unchanged use 0. Separate multiple neuro pairs with semicolons in a single line.
+    - <advice> is free-form text (1-3 sentences) with tips for Senior (tone, content, follow-up question ideas).
+    - Do NOT return JSON, Markdown, or any other text outside the two blocks.
+    - Never write the final assistant reply for the user.
+    """
+).strip()
 
 
-def _extract_json(raw: str) -> str | None:
-    if not raw:
-        return None
-    m = re.search(r"<json>(.+?)</json>", raw, flags=re.S | re.I)
-    if m:
-        return m.group(1).strip()
-    m = re.search(r"```json\s*(.+?)```", raw, flags=re.S | re.I)
-    if m:
-        return m.group(1).strip()
-    s, e = raw.find("{"), raw.rfind("}")
-    if s != -1 and e != -1 and e > s:
-        return raw[s : e + 1].strip()
-    return None
-
-
-_SCHEMA = json.loads(Path("config/schemas/junior.v2.schema.json").read_text(encoding="utf-8"))
-
-_SYS = """You are JUNIOR for Arkestra.
-Return ONLY compact JSON v2 with keys: intent, tools_hint, (optional) tools_request, rag_query, style_directive, neuro_update.levels, neuro_update.reason.
-Do NOT write the user's final answer.
-Suggestions[].text must stay in the user's language, sound warm, and contain at least 12 words.
-Keep under 120 tokens."""
+_NEURO_KEYS = ("dopamine", "serotonin", "norepinephrine", "acetylcholine")
 
 
 def _build_prompt(payload: Dict[str, Any]) -> str:
@@ -107,75 +59,112 @@ def _build_prompt(payload: Dict[str, Any]) -> str:
         f"TOOLS_CATALOG (name+desc only): {tools_catalog}\n"
         f"HISTORY_TAIL: {hist}\n"
         f"USER: {user_text}\n"
-        f"Reply with JSON v2 only."
+        "Respond now with <ctrl> and <advice> blocks only."
     )
 
 
-def generate(payload: Dict[str, Any], **kwargs) -> Dict[str, Any]:
-    prompt = STRICT_JSON_JR + "\n\n" + _build_prompt(payload) + "\n\nOutput:\n<json>"
+def _run_model(prompt: str, temperature: float, max_new_tokens: int, repeat_penalty: float) -> str:
+    return llm_generate(
+        "junior",
+        prompt,
+        max_new_tokens=max_new_tokens,
+        temperature=temperature,
+        repeat_penalty=repeat_penalty,
+    )
+
+
+def _sanitize_int(value: str) -> int | None:
+    cleaned = value.strip()
+    if not cleaned:
+        return None
+    match = re.search(r"[-+]?\d+", cleaned)
+    if not match:
+        return None
+    try:
+        return int(match.group(0))
+    except ValueError:
+        return None
+
+
+def _parse_neuro_pairs(text: str) -> Dict[str, int]:
+    levels: Dict[str, int] = {}
+    if not text:
+        return levels
+    parts = [segment.strip() for segment in text.split(";") if segment.strip()]
+    for part in parts:
+        if "=" in part:
+            key, raw = part.split("=", 1)
+        else:
+            continue
+        key = key.strip().lower()
+        if key not in _NEURO_KEYS:
+            continue
+        value = _sanitize_int(raw)
+        if value is None:
+            continue
+        levels[key] = value
+    return levels
+
+
+def parse_neuro(ctrl: Dict[str, str]) -> Dict[str, Dict[str, int]]:
+    levels: Dict[str, int] = {}
+    for key in _NEURO_KEYS:
+        if key in ctrl:
+            parsed = _parse_neuro_pairs(f"{key}={ctrl[key]}")
+            levels.update(parsed)
+    for alias in ("neuro", "neuro_levels", "neuro_update", "levels"):
+        if alias in ctrl:
+            levels.update(_parse_neuro_pairs(ctrl[alias]))
+    cleaned = {k: levels.get(k, 0) for k in _NEURO_KEYS if k in levels}
+    if not cleaned:
+        return {}
+    return {"levels": cleaned}
+
+
+def parse_junior(text: str) -> Dict[str, Any]:
+    ctrl: Dict[str, str] = {}
+    advice = ""
+    if text:
+        m1 = re.search(r"<ctrl>(.+?)</ctrl>", text, re.S | re.I)
+        if m1:
+            for line in m1.group(1).splitlines():
+                line = line.strip()
+                if not line or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                ctrl[k.strip().lower()] = v.strip()
+        m2 = re.search(r"<advice>(.+?)</advice>", text, re.S | re.I)
+        if m2:
+            advice = m2.group(1).strip()
+
+    intent = ctrl.get("intent", "other") or "other"
+    tools_raw = ctrl.get("tools", "")
+    tools = [s.strip() for s in tools_raw.split(",") if s.strip()]
+    rag_query = ctrl.get("rag_query") or None
+    neuro = parse_neuro(ctrl)
+    return {
+        "intent": intent,
+        "tools_request": tools,
+        "rag_query": rag_query,
+        "neuro_update": neuro or {},
+        "advice_text": advice,
+    }
+
+
+def generate(payload: Dict[str, Any], **kwargs) -> str:
+    prompt = _build_prompt(payload)
     requested_tokens = kwargs.get("max_new_tokens")
     if isinstance(requested_tokens, int):
         max_new_tokens = max(160, requested_tokens)
     else:
         max_new_tokens = 160
 
-    stop_sequences = ["</json>"]
     base_temperature = kwargs.get("temperature", 0.2)
     repeat_penalty = kwargs.get("repeat_penalty", 1.1)
 
-    def _run(temp: float) -> str:
-        return llm_generate(
-            "junior",
-            prompt,
-            max_new_tokens=max_new_tokens,
-            temperature=temp,
-            stop=stop_sequences,
-            repeat_penalty=repeat_penalty,
-        )
-
-    raw = _run(base_temperature).strip()
-    if raw and not raw.endswith("</json>"):
-        raw = f"{raw}</json>"
-
-    block = _extract_json(raw)
-    if not block:
-        retry_raw = _run(0.1).strip()
-        if retry_raw and not retry_raw.endswith("</json>"):
-            retry_raw = f"{retry_raw}</json>"
-        block = _extract_json(retry_raw)
-        if not block:
-            snippet = retry_raw if retry_raw else raw
-            raise RuntimeError(f"Junior returned non-JSON: {snippet[:2000]}")
-        raw = retry_raw
-    data = json.loads(block)
-
-    if "neuro_update.levels" in data and "neuro_update" not in data:
-        data["neuro_update"] = {"levels": data.pop("neuro_update.levels")}
-
-    # Validate
-    try:
-        validate(instance=data, schema=_SCHEMA)
-    except ValidationError as e:
-        raise RuntimeError(f"Junior JSON v2 schema validation failed: {e.message}")
-
-    data.setdefault("suggestions", [{"kind": "good", "text": ""}, {"kind": "mischief", "text": ""}])
-    data.setdefault("memory_hint", [])
-    data.setdefault("rag_query", None)
-    data.setdefault("rag_targets", None)
-    data.setdefault("style_directive", None)
-    data.setdefault("tools_hint", None)
-    data.setdefault("tools_request", None)
-    data.setdefault("proactive", {"allow": False, "reason": "", "cooldown_s": 0})
-
-    nu = data.get("neuro_update") or {}
-    lv = nu.get("levels") or {}
-    if not isinstance(lv, dict):
-        # Неправильный формат от модели. Сбрасываем в пустой словарь,
-        # чтобы последующая нормализация не падала.
-        lv = {}
-    for k in ("dopamine", "serotonin", "norepinephrine", "acetylcholine"):
-        lv.setdefault(k, 0)
-    nu["levels"] = lv
-    data["neuro_update"] = nu
-
-    return data
+    raw = _run_model(prompt, float(base_temperature), max_new_tokens, repeat_penalty).strip()
+    if "<ctrl" not in raw or "<advice" not in raw:
+        retry = _run_model(prompt, 0.1, max_new_tokens, repeat_penalty).strip()
+        if retry:
+            raw = retry
+    return raw

@@ -8,7 +8,7 @@ from app.core import neuro
 from app.core.router import search as rag_search
 from app.core.tools_runner import run_all
 from app.core.guard import soft_censor
-from app.agents.junior import generate as jr_generate
+from app.agents.junior import generate as jr_generate, parse_junior
 from app.agents.senior import (
     generate_structured as sr_generate,
     refine_with_results as sr_refine,
@@ -16,7 +16,6 @@ from app.agents.senior import (
 from app.core.budget import trim as pack_budget
 from app.core.tokens import count_struct, count_tokens
 from app.core.logs import log, span
-from app.core.bandit import pick as bandit_pick
 
 try:  # pragma: no cover - optional dependency
     import yaml  # type: ignore
@@ -61,13 +60,15 @@ def handle_user(
     hist_tail = get_last_messages(user_id, n=_HISTORY_WINDOW)
 
     # 2) junior
+    jr_raw = ""
+    jr_struct: Dict[str, Any] = {}
     with span("junior"):
         jr_payload = {
             "history_tail": hist_tail,
             "user_text": text,
             "neuro_snapshot": neuro.snapshot(),
             "env_brief": env_brief,
-            "tools_catalog": [  # краткий каталог
+            "tools_catalog": [
                 {"name": "note.create", "desc": "сохранить заметку"},
                 {"name": "reminder.create", "desc": "создать напоминание"},
                 {"name": "tg.message.send", "desc": "отправить сообщение в TG"},
@@ -77,53 +78,55 @@ def handle_user(
             ],
         }
         try:
-            jr = jr_generate(jr_payload)  # ожидается JSON v2
+            jr_raw = jr_generate(jr_payload)
+            jr_struct = parse_junior(jr_raw)
         except Exception:
             log.exception("junior failed; falling back to defaults")
-            jr = {
-                "intent": "ask",
-                "tools_hint": [],
-                "style_directive": "дружелюбно и коротко",
-                "neuro_update": {"levels": neuro.snapshot()},
-                "suggestions": [
-                    {
-                        "kind": "good",
-                        "text": "Привет! Я рядом и с удовольствием помогу. Расскажи, что сейчас занимает твои мысли, и чем я могу поддержать тебя?",
-                    },
-                    {
-                        "kind": "mischief",
-                        "text": "Эй, давай сделаем сегодня что-то необычное и весёлое! О чём мечтаешь прямо сейчас, может, устроим маленькое приключение?",
-                    },
-                ],
-            }
+            jr_raw = ""
+            jr_struct = {}
 
-    bandit_intent = "task"
-    bandit_chosen_kind: str | None = None
-    raw_tools_req = jr.get("tools_request") if jr else None
-    tools_req = [r for r in raw_tools_req if isinstance(r, dict)] if isinstance(raw_tools_req, list) else []
-    if jr:
-        bandit_intent = jr.get("intent") or bandit_intent
-        suggestions = jr.get("suggestions")
-        if isinstance(suggestions, list) and suggestions:
-            chosen = jr.get("chosen_suggestion") if isinstance(jr.get("chosen_suggestion"), dict) else None
-            if not chosen:
-                try:
-                    chosen = bandit_pick(bandit_intent, suggestions)
-                except Exception:
-                    chosen = None
-                if chosen:
-                    jr["chosen_suggestion"] = chosen
-            if isinstance(chosen, dict):
-                bandit_chosen_kind = chosen.get("kind")
-            if bandit_chosen_kind is None:
-                first = suggestions[0] if isinstance(suggestions[0], dict) else {}
-                bandit_chosen_kind = first.get("kind", "good")
+    jr_intent = str(jr_struct.get("intent", "other") if isinstance(jr_struct, dict) else "other")
+    jr_tools = (
+        [t for t in jr_struct.get("tools_request", []) if isinstance(t, str)]
+        if isinstance(jr_struct, dict)
+        else []
+    )
+    jr_rag_query = jr_struct.get("rag_query") if isinstance(jr_struct, dict) else None
+    if isinstance(jr_rag_query, str):
+        jr_rag_query = jr_rag_query.strip() or None
+    else:
+        jr_rag_query = None
+    jr_neuro = jr_struct.get("neuro_update") if isinstance(jr_struct, dict) else {}
+    if not isinstance(jr_neuro, dict):
+        jr_neuro = {}
+    jr_levels_raw = jr_neuro.get("levels") if isinstance(jr_neuro.get("levels"), dict) else {}
+    jr_levels: Dict[str, int] = {}
+    for key, value in (jr_levels_raw or {}).items():
+        try:
+            jr_levels[key] = int(value)
+        except (TypeError, ValueError):
+            continue
+    jr_neuro = {"levels": jr_levels} if jr_levels else {}
+    jr_advice = (
+        str(jr_struct.get("advice_text", ""))
+        if isinstance(jr_struct, dict)
+        else ""
+    )
+
+    jr_ctrl = {
+        "intent": jr_intent or "other",
+        "tools_request": jr_tools,
+        "rag_query": jr_rag_query,
+        "neuro_update": jr_neuro,
+    }
+    jr = dict(jr_ctrl)
+    jr["advice_text"] = jr_advice
+    jr["raw"] = jr_raw
+
+    bandit_intent = str(jr.get("intent") or "task")
+    tools_req = jr_tools
     catalog_names = {t["name"] for t in jr_payload["tools_catalog"]}
-    missing = [
-        r
-        for r in tools_req
-        if r.get("name") and r["name"] not in catalog_names
-    ]
+    missing = [name for name in tools_req if name not in catalog_names]
     if missing:
         # превратить в мягкую просьбу пользователю через senior первичным текстом
         # senior сам вставит предложение "Хочешь, добавим инструмент X? Я подскажу спецификацию."
@@ -162,8 +165,8 @@ def handle_user(
 
     # 4) RAG
     with span("rag"):
-        rag_query = jr.get("rag_query", "") if jr else ""
-        intent = jr.get("intent", "other") if jr else "other"
+        rag_query = jr_ctrl.get("rag_query") or ""
+        intent = jr_ctrl.get("intent") or "other"
         rag_hits = rag_search(rag_query, intent)
 
     # 5) senior
@@ -171,7 +174,7 @@ def handle_user(
         packed = pack_budget(
             history=hist_tail,
             rag_hits=rag_hits,
-            junior_meta=jr,
+            junior_meta=jr_ctrl,
             max_tokens=preset_max_tokens,
         )
         hist_tokens = count_struct(packed["history"])
@@ -181,33 +184,6 @@ def handle_user(
         jr_tokens = count_tokens(str(packed["junior_meta"])) if packed["junior_meta"] else 0
         total_tokens = hist_tokens + rag_tokens + jr_tokens
         persona = neuro.persona_brief()
-        suggestions = jr.get("suggestions") if isinstance(jr, dict) else None
-        if isinstance(suggestions, list):
-            limited_suggestions = []
-            for candidate in suggestions:
-                if not isinstance(candidate, dict):
-                    continue
-                text_value = str(candidate.get("text", "")).strip()
-                if not text_value:
-                    text_value = (
-                        "Привет! Я здесь, чтобы поддержать тебя и помочь разобраться."
-                        " Расскажи, что сейчас важно, и чем мне заняться в первую очередь?"
-                    )
-                elif len(text_value.split()) < 12:
-                    text_value = (
-                        text_value
-                        + " Я рядом и готова поддержать. Что сейчас кажется самым важным?"
-                    )
-                limited_suggestions.append(
-                    {
-                        "kind": candidate.get("kind", "good"),
-                        "text": text_value,
-                    }
-                )
-                if len(limited_suggestions) >= 3:
-                    break
-        else:
-            limited_suggestions = []
 
         sr_payload = {
             "history": packed["history"],
@@ -215,10 +191,10 @@ def handle_user(
             "user_text": text,
             "last_user_text": text,
             "rag_hits": packed["rag_hits"],
-            "junior_json": packed["junior_meta"],
-            "jr_suggestions": limited_suggestions,
+            "jr_ctrl": packed["junior_meta"],
+            "jr_advice": jr_advice,
             "preset": preset,
-            "style_directive": jr.get("style_directive", "") if jr else "",
+            "style_directive": "",
             "style_hint": style_hint,
             "env_brief": env_brief,
             "persona": persona,
@@ -242,10 +218,8 @@ def handle_user(
                 return [str(v) for v in value if isinstance(v, str)]
             return []
 
-        tool_instr = (
-            get_tool_instructions(_normalise_tool_hints(jr.get("tools_hint")))
-            if jr
-            else {}
+        tool_instr = get_tool_instructions(
+            _normalise_tool_hints(jr_ctrl.get("tools_request"))
         )
         sr_payload["tool_instructions"] = tool_instr
         reply = sr_generate(sr_payload)
@@ -280,21 +254,7 @@ def handle_user(
         base_text = reply.get("text", "") if reply else ""
         final_text, hits = soft_censor(base_text)
     assistant_msg_id = insert_message(user_id, "assistant", final_text)
-    bandit_kind = bandit_chosen_kind
-    if not bandit_kind:
-        bandit_kind = "good" if tool_calls else "mischief"
-    # fast bandit update if junior had suggestions
-    try:
-        if jr and jr.get("suggestions"):
-            chosen = jr.get("chosen_suggestion") or {}
-            bandit_kind = chosen.get("kind") or (tool_calls and "good" or "mischief") or "good"
-    except Exception:
-        bandit_kind = None
-
-    if not bandit_kind:
-        bandit_kind = bandit_chosen_kind or ("good" if tool_calls else "mischief")
-    if not bandit_kind:
-        bandit_kind = "good"
+    bandit_kind = "good" if tool_calls else "mischief"
 
     try:
         set_message_meta(assistant_msg_id, "last_intent", str(bandit_intent))
